@@ -100,9 +100,14 @@ class SDE(object):
         self._sim_sym = {}
         self._gpu_sym = {}
 
+        # Additional global symbols which are defined for every simulation.
         global_vars.append('samples');
         global_vars.append('dt');
 
+        # By default, assume that all parameters are constants during a single run.
+        # This might not be the case if one of the parameters will be scanned over
+        # in the kernel, in which case it will be removed from the list at a later
+        # time.
         for par, desc in sim_params:
             global_vars.append(par)
 
@@ -126,7 +131,7 @@ class SDE(object):
         """Automatically determine which parameter is to be scanned over
         in a single kernel run.
         """
-        max_i = 0
+        max_i = -1
         max_par = None
         max = 0
 
@@ -136,6 +141,10 @@ class SDE(object):
                 max_par = par
                 max = len(self.options.__dict__[par])
                 max_i = i
+
+        # No variable to scan over.
+        if max_i < 0:
+            return (None, (0.0, 0.0, 1))
 
         # Remove this parameter from the list of parameters with multiple
         # values, so that we don't loop over it when running the simulation.
@@ -170,7 +179,11 @@ class SDE(object):
                                  set(self.global_vars) - set(['dt', 'samples']),
                                  sde_code)
         scan_var, scan_var_range = self._find_cuda_scan_par()
-        src = gen.SRK2(set([scan_var]))
+
+        if scan_var is not None:
+            src = gen.SRK2(set([scan_var]))
+        else:
+            src = gen.SRK2(set([]))
 
         if self.options.save_src is not None:
             with open(self.options.save_src, 'w') as file:
@@ -249,6 +262,9 @@ class SDE(object):
         self._gpu_rng_state = cuda.mem_alloc(self._rng_state.nbytes)
         cuda.memcpy_htod(self._gpu_rng_state, self._rng_state)
 
+        if self.scan_var is None:
+            return
+
         # Initialize the scan variable.
         tmp = []
         if self.sv_samples == 1:
@@ -275,7 +291,12 @@ class SDE(object):
             parameters
         """
         self.block_size = block_size
-        arg_types = ['P'] + ['P']*self._num_vars + ['P', numpy.float32]
+        arg_types = ['P'] + ['P']*self._num_vars
+
+        if self.scan_var is not None:
+            arg_types += ['P']
+
+        arg_types += [numpy.float32]
         self.advance_sim.prepare(arg_types, block=(block_size, 1, 1))
         self._run_nested(self.parser.par_multi, freq_var, calculated_params)
 
@@ -308,20 +329,24 @@ class SDE(object):
         for par in self.parser.par_multi:
             self.text_prefix.append(self._sim_sym[par])
 
+        kernel_args = [self._gpu_rng_state] + self._gpu_vec
+        if self.scan_var is not None:
+            kernel_args += [self._gpu_sv]
+
         if self.options.omode == 'avgv':
-            self._run_avgv(period)
+            self._run_avgv(kernel_args, period)
         elif self.options.omode == 'avgpath':
-            self._run_avgpath()
+            self._run_avgpath(kernel_args)
 
         self._output_finish_block()
 
-    def _run_avgpath(self):
+    def _run_avgpath(self, kernel_args):
         cutoff_every = 10
         self._vec_nx = numpy.zeros_like(self._vec[0])
 
         for j in range(0, int(self.options.simperiods * self.options.spp / self.options.samples)+1):
             self.sim_t = self.options.samples * j * self.dt
-            args = [self._gpu_rng_state] + self._gpu_vec + [self._gpu_sv, numpy.float32(self.sim_t)]
+            args = kernel_args + [numpy.float32(self.sim_t)]
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
 
             for i in range(0, self._num_vars):
@@ -335,7 +360,7 @@ class SDE(object):
             self._output_results(self._get_var_avgpath, self.sim_t)
             self.sim_t += self.options.samples * self.dt
 
-    def _run_avgv(self, period):
+    def _run_avgv(self, kernel_args, period):
         transient = True
         self._vec_start = []
         for i in range(0, self._num_vars):
@@ -362,7 +387,7 @@ class SDE(object):
                 self.start_t = self.sim_t
                 self._vec_start_nx = self._vec_nx
 
-            args = [self._gpu_rng_state] + self._gpu_vec + [self._gpu_sv, numpy.float32(self.sim_t)]
+            args = kernel_args + [numpy.float32(self.sim_t)]
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
 
             self.sim_t += self.options.samples * self.dt
@@ -378,6 +403,8 @@ class SDE(object):
         else:
             vec = self._vec[i][start:end]
 
+        vec = vec.astype(numpy.float64)
+
         return [numpy.average(vec), numpy.average(numpy.square(vec))]
 
     def _get_var_avgv(self, i, start, end):
@@ -388,9 +415,14 @@ class SDE(object):
             vec = self._vec[i][start:end]
             vec_start = self._vec_start[i][start:end]
 
+        vec = vec.astype(numpy.float64)
+        vec_start = vec_start.astype(numpy.float64)
+
+        deff1 = numpy.average(numpy.square(vec)) - numpy.average(vec)**2
+        deff2 = numpy.average(numpy.square(vec_start)) - numpy.average(vec_start)**2
+
         return [(numpy.average(vec) - numpy.average(vec_start)) / (self.sim_t - self.start_t),
-                numpy.average(vec), numpy.average(numpy.square(vec)),
-                numpy.average(vec_start), numpy.average(numpy.square(vec_start))
+                (deff1 - deff2) / (self.sim_t - self.start_t),
                ]
 
     def _output_results(self, get_var, *misc_pars):
@@ -398,7 +430,10 @@ class SDE(object):
             out = []
             out.extend(self.text_prefix)
             out.extend(misc_pars)
-            out.append(self._sv[i*self.options.paths])
+
+            if self.scan_var is not None:
+                out.append(self._sv[i*self.options.paths])
+
             for j in range(0, len(self._vec)):
                 out.extend(get_var(j, i*self.options.paths, (i+1)*self.options.paths))
 
@@ -428,7 +463,7 @@ class SDE(object):
             self.h5table.flush()
 
     def _output_text(self, pars):
-        rep = ['%12.5e' % x for x in pars]
+        rep = ['%15.8e' % x for x in pars]
         print ' '.join(rep)
 
     def _output_hdfexp(self, pars):
@@ -448,7 +483,10 @@ class SDE(object):
         desc = {}
         pars = []
         pars.extend(self.parser.par_multi)
-        pars.append(self.scan_var)
+
+        if self.scan_var is not None:
+            pars.append(self.scan_var)
+
         if self.options.omode == 'avgpath':
             pars.append('t')
         for i in range(0, self._num_vars):
@@ -473,7 +511,8 @@ class SDE(object):
         for par in self.parser.par_multi:
             print par,
 
-        print '%s' % self.scan_var,
+        if self.scan_var is not None:
+            print '%s' % self.scan_var,
         for i in range(0, self._num_vars):
             print 'x%d' % i,
 
