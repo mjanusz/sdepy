@@ -142,8 +142,8 @@ class SDE(object):
         del self.parser.par_multi[max_i]
         self.global_vars.remove(max_par)
 
-        return (max_par, (self.options.__dict__[par][0],
-                          self.options.__dict__[par][-1],
+        return (max_par, (self.options.__dict__[max_par][0],
+                          self.options.__dict__[max_par][-1],
                           max))
 
     def cuda_prep_gen(self, num_vars, init_vector, noises, noise_strength_map,
@@ -267,7 +267,9 @@ class SDE(object):
 
         block_size: CUDA block size
         freq_var: name of the parameter which is to be interpreted as a
-            frequency (determines the step size 'dt')
+            frequency (determines the step size 'dt').  If ``None``, the
+            system period will be assumed to be 1.0 and the time step size
+            will be set to 1.0/spp.
         calculated_params: a function, which given an instance of this
             class will setup the values of automatically calculated
             parameters
@@ -314,6 +316,9 @@ class SDE(object):
         self._output_finish_block()
 
     def _run_avgpath(self):
+        cutoff_every = 10
+        self._vec_nx = numpy.zeros_like(self._vec[0])
+
         for j in range(0, int(self.options.simperiods * self.options.spp / self.options.samples)+1):
             self.sim_t = self.options.samples * j * self.dt
             args = [self._gpu_rng_state] + self._gpu_vec + [self._gpu_sv, numpy.float32(self.sim_t)]
@@ -321,6 +326,11 @@ class SDE(object):
 
             for i in range(0, self._num_vars):
                 cuda.memcpy_dtoh(self._vec[i], self._gpu_vec[i])
+
+            if j % cutoff_every == 0:
+                self._vec_nx = numpy.add(self._vec_nx, numpy.floor_divide(self._vec[0], 2.0 * numpy.pi))
+                self._vec[0] = numpy.remainder(self._vec[0], 2.0 * numpy.pi)
+                cuda.memcpy_htod(self._gpu_vec[0], self._vec[0])
 
             self._output_results(self._get_var_avgpath, self.sim_t)
             self.sim_t += self.options.samples * self.dt
@@ -331,14 +341,26 @@ class SDE(object):
         for i in range(0, self._num_vars):
             self._vec_start.append(numpy.zeros_like(self._vec[i]))
 
+        # FIXME: This should be a generic feature.
+        self._vec_nx = numpy.zeros_like(self._vec[0])
+        cutoff_every = 10
+
         # Actually run the simulation
         for j in range(0, int(self.options.simperiods * self.options.spp / self.options.samples)+1):
             self.sim_t = self.options.samples * j * self.dt
+
+            if j % cutoff_every == 0:
+                cuda.memcpy_dtoh(self._vec[0], self._gpu_vec[0])
+                self._vec_nx = numpy.add(self._vec_nx, numpy.floor_divide(self._vec[0], 2.0 * numpy.pi))
+                self._vec[0] = numpy.remainder(self._vec[0], 2.0 * numpy.pi)
+                cuda.memcpy_htod(self._gpu_vec[0], self._vec[0])
+
             if transient and self.sim_t >= self.options.transients * period:
                 for i in range(0, self._num_vars):
                     cuda.memcpy_dtoh(self._vec_start[i], self._gpu_vec[i])
                 transient = False
                 self.start_t = self.sim_t
+                self._vec_start_nx = self._vec_nx
 
             args = [self._gpu_rng_state] + self._gpu_vec + [self._gpu_sv, numpy.float32(self.sim_t)]
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
@@ -351,13 +373,24 @@ class SDE(object):
         self._output_results(self._get_var_avgv)
 
     def _get_var_avgpath(self, i, start, end):
-        return [numpy.average(self._vec[i][start:end]), numpy.average(numpy.square(self._vec[i][start:end]))]
+        if i == 0:
+            vec = self._vec[i][start:end] + 2.0 * numpy.pi * self._vec_nx[start:end]
+        else:
+            vec = self._vec[i][start:end]
+
+        return [numpy.average(vec), numpy.average(numpy.square(vec))]
 
     def _get_var_avgv(self, i, start, end):
-        return [(numpy.average(self._vec[i][start:end]) -
-                numpy.average(self._vec_start[i][start:end])) / (self.sim_t - self.start_t),
-                numpy.average(self._vec[i][start:end]), numpy.average(numpy.square(self._vec[i][start:end])),
-                numpy.average(self._vec_start[i][start:end]), numpy.average(numpy.square(self._vec_start[i][start:end]))
+        if i == 0:
+            vec = self._vec[i][start:end] + 2.0 * numpy.pi * self._vec_nx[start:end]
+            vec_start = self._vec_start[i][start:end] + 2.0 * numpy.pi * self._vec_start_nx[start:end]
+        else:
+            vec = self._vec[i][start:end]
+            vec_start = self._vec_start[i][start:end]
+
+        return [(numpy.average(vec) - numpy.average(vec_start)) / (self.sim_t - self.start_t),
+                numpy.average(vec), numpy.average(numpy.square(vec)),
+                numpy.average(vec_start), numpy.average(numpy.square(vec_start))
                ]
 
     def _output_results(self, get_var, *misc_pars):
@@ -433,6 +466,7 @@ class SDE(object):
             print '# seed = %d' % self.options.seed
         print '# sim periods = %d' % self.options.simperiods
         print '# transient periods = %d' % self.options.transients
+        print '# spp = %d' % self.options.spp
         for par in self.parser.par_single:
             print '# %s = %f' % (par, self.options.__dict__[par])
         print '#',
