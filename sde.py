@@ -102,7 +102,9 @@ class SDE(object):
 
         global_vars.append('samples');
         global_vars.append('dt');
-        global_vars.extend(sim_params)
+
+        for par, desc in sim_params:
+            global_vars.append(par)
 
         for name, help_string in sim_params:
             self.parser.add_option('--%s' % name, dest=name, action='callback',
@@ -260,7 +262,7 @@ class SDE(object):
         self._gpu_sv = cuda.mem_alloc(self._sv.nbytes)
         cuda.memcpy_htod(self._gpu_sv, self._sv)
 
-    def cuda_run(self, block_size, freq_var, calculated_params):
+    def cuda_run(self, block_size, calculated_params, freq_var=None):
         """Run a CUDA SDE simulation.
 
         block_size: CUDA block size
@@ -284,7 +286,10 @@ class SDE(object):
 
     def _run_kernel(self, freq_var, calculated_params):
         # Calculate period and step size.
-        period = 2.0 * math.pi / self._sim_sym[freq_var]
+        if freq_var is not None:
+            period = 2.0 * math.pi / self._sim_sym[freq_var]
+        else:
+            period = 1.0
         self.dt = numpy.float32(period / self.options.spp)
         cuda.memcpy_htod(self._gpu_sym['dt'], self.dt)
 
@@ -304,11 +309,11 @@ class SDE(object):
         if self.options.omode == 'avgv':
             self._run_avgv(period)
         elif self.options.omode == 'avgpath':
-            self._run_avgpath(period)
+            self._run_avgpath()
 
         self._output_finish_block()
 
-    def _run_avgpath(self, period):
+    def _run_avgpath(self):
         for j in range(0, int(self.options.simperiods * self.options.spp / self.options.samples)+1):
             self.sim_t = self.options.samples * j * self.dt
             args = [self._gpu_rng_state] + self._gpu_vec + [self._gpu_sv, numpy.float32(self.sim_t)]
@@ -346,11 +351,12 @@ class SDE(object):
         self._output_results(self._get_var_avgv)
 
     def _get_var_avgpath(self, i, start, end):
-        return numpy.average(self._vec[i][start:end])
+        return [numpy.average(self._vec[i][start:end]), numpy.average(numpy.square(self._vec[i][start:end]))]
 
     def _get_var_avgv(self, i, start, end):
-        return (numpy.average(self._vec[i][start:end]) -
-                numpy.average(self._vec_start[i][start:end])) / (self.sim_t - self.start_t)
+        return [(numpy.average(self._vec[i][start:end]) -
+                numpy.average(self._vec_start[i][start:end])) / (self.sim_t - self.start_t),
+                numpy.average(self._vec[i][start:end]), numpy.average(numpy.square(self._vec[i][start:end]))]
 
     def _output_results(self, get_var, *misc_pars):
         for i in range(0, self.sv_samples):
@@ -359,7 +365,7 @@ class SDE(object):
             out.extend(misc_pars)
             out.append(self._sv[i*self.options.paths])
             for j in range(0, len(self._vec)):
-                out.append(get_var(j, i*self.options.paths, (i+1)*self.options.paths))
+                out.extend(get_var(j, i*self.options.paths, (i+1)*self.options.paths))
 
             if self.options.oformat == 'text':
                 self._output_text(out)

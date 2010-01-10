@@ -37,7 +37,7 @@ if not sdei.parse_args():
 	sys.exit(1)
 
 sdei.cuda_prep_gen(2, init_vector, 1, ns_map, code)
-sdei.cuda_run(64, 'omega', calculated_params)
+sdei.cuda_run(64, calculated_params, 'omega')
 
 
 
