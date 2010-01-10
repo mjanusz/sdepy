@@ -356,7 +356,9 @@ class SDE(object):
     def _get_var_avgv(self, i, start, end):
         return [(numpy.average(self._vec[i][start:end]) -
                 numpy.average(self._vec_start[i][start:end])) / (self.sim_t - self.start_t),
-                numpy.average(self._vec[i][start:end]), numpy.average(numpy.square(self._vec[i][start:end]))]
+                numpy.average(self._vec[i][start:end]), numpy.average(numpy.square(self._vec[i][start:end])),
+                numpy.average(self._vec_start[i][start:end]), numpy.average(numpy.square(self._vec_start[i][start:end]))
+               ]
 
     def _output_results(self, get_var, *misc_pars):
         for i in range(0, self.sv_samples):
