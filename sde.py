@@ -326,7 +326,7 @@ class SDE(object):
 
         if self.options.save_src is not None:
             with open(self.options.save_src, 'w') as file:
-                print >>file, src
+                print >>file, kernel_source
 
         return self.cuda_prep(init_vectors, kernel_source, scan_var, scan_var_range)
 
