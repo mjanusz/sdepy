@@ -14,25 +14,37 @@ import pycuda.compiler
 from mako.template import Template
 from mako.lookup import TemplateLookup
 
-def _get_var_avgpath(sde, i, start, end):
-    vec = sde.get_var(i, start, end)
-    vec = vec.astype(numpy.float64)
+def drift_velocity(sde, *args):
+    ret = []
+    for starting, final in args:
+        a = starting.astype(numpy.float64)
+        b = final.astype(numpy.float64)
 
-    return [numpy.average(vec), numpy.average(numpy.square(vec))]
+        ret.append((numpy.average(b) - numpy.average(a)) /
+                (sde.sim_t - sde.start_t))
 
-def _get_var_avgv(sde, i, start, end):
-    vec = sde.get_var(i, start, end)
-    vec_start = sde.get_var(i, start, end, True)
+    return ret
 
-    vec = vec.astype(numpy.float64)
-    vec_start = vec_start.astype(numpy.float64)
+def diffusion_coefficient(sde, *args):
+    ret = []
+    for starting, final in args:
+        a = starting.astype(numpy.float64)
+        b = final.astype(numpy.float64)
 
-    deff1 = numpy.average(numpy.square(vec)) - numpy.average(vec)**2
-    deff2 = numpy.average(numpy.square(vec_start)) - numpy.average(vec_start)**2
+        deff1 = numpy.average(numpy.square(b)) - numpy.average(b)**2
+        deff2 = numpy.average(numpy.square(a)) - numpy.average(a)**2
+        ret.append((deff1 - deff2) / (2.0 * (sde.sim_t - sde.start_t)))
 
-    return [(numpy.average(vec) - numpy.average(vec_start)) / (sde.sim_t - sde.start_t),
-            (deff1 - deff2) / (sde.sim_t - sde.start_t)
-           ]
+    return ret
+
+def avg_moments(sde, *args):
+    ret = []
+
+    for arg in args:
+        ret.append(numpy.average(arg))
+        ret.append(numpy.average(numpy.square(arg)))
+
+    return ret
 
 def _convert_to_double(src):
     import re
@@ -198,7 +210,7 @@ class SDE(object):
         self.parser.add_option('--paths', dest='paths', help='number of paths to sample', type='int', action='store', default=256)
         self.parser.add_option('--transients', dest='transients', help='number of periods to ignore because of transients', type='int', action='store', default=200)
         self.parser.add_option('--simperiods', dest='simperiods', help='number of periods in the simulation', type='int', action='store', default=2000)
-        self.parser.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['final', 'path'], action='store', default='final')
+        self.parser.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
         self.parser.add_option('--seed', dest='seed', help='RNG seed', type='int', action='store', default=None)
         self.parser.add_option('--output_format', dest='oformat', help='output file format', type='choice', choices=['text', 'hdf_expanded', 'hdf_nested'], action='store', default='text')
         self.parser.add_option('--save_src', dest='save_src', help='save the generated source to FILE', metavar='FILE',
@@ -408,7 +420,7 @@ class SDE(object):
     def get_param(self, name):
         return self._sim_sym[name]
 
-    def get_var(self, i, start, end, starting=False):
+    def get_var(self, i, starting=False):
         if starting:
             vec = self.vec_start
             nx = self.vec_start_nx
@@ -417,13 +429,17 @@ class SDE(object):
             nx = self.vec_nx
 
         if i in nx:
-            return vec[i][start:end] + self.periodic_map[i][0] * nx[i][start:end]
+            return vec[i] + self.periodic_map[i][0] * nx[i]
         else:
-            return vec[i][start:end]
+            return vec[i]
 
-    def simulate(self, calculated_params, block_size=64, freq_var=None):
+    def simulate(self, req_output, calculated_params, block_size=64, freq_var=None):
         """Run a CUDA SDE simulation.
 
+        req_output: a dictionary mapping the the output mode to a list of
+            tuples of ``(callable, vars)``, where ``callable`` is a function
+            that will compute the values to be returned, and ``vars`` is a list
+            of variables that will be passed to this function
         calculated_params: a function, which given an instance of this
             class will setup the values of automatically calculated
             parameters
@@ -433,6 +449,13 @@ class SDE(object):
             system period will be assumed to be 1.0 and the time step size
             will be set to 1.0/spp.
         """
+        self.req_output = req_output[self.options.omode]
+
+        # Determine which variables are necessary for the output.
+        self.req_vars = set([])
+        for i, v in self.req_output:
+            self.req_vars |= set(v)
+
         self.block_size = block_size
         arg_types = ['P'] + ['P']*self.num_vars
 
@@ -516,11 +539,8 @@ class SDE(object):
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
 
             if every:
-                for i in range(0, self.num_vars):
-                    cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
-
-                fold_variables(j, False)
-                self._output_results(_get_var_avgpath, self.sim_t)
+                fold_variables(j, True)
+                self.output_current()
             elif transient and self.sim_t >= self.options.transients * period:
                 for i in range(0, self.num_vars):
                     cuda.memcpy_dtoh(self.vec_start[i], self._gpu_vec[i])
@@ -532,14 +552,29 @@ class SDE(object):
             self.sim_t += self.options.samples * self.dt
 
         if not every:
-            for i in range(0, self.num_vars):
-                cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
-
-            self._output_results(_get_var_avgv)
+            self.output_summary()
 
         self.output.finish_block()
 
-    def _output_results(self, get_var, *misc_pars):
+    def output_current(self):
+        vars = {}
+
+        for i in self.req_vars:
+            cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
+            vars[i] = self.get_var(i)
+
+        self._output_results(vars, self.sim_t)
+
+    def output_summary(self):
+        vars = {}
+
+        for i in self.req_vars:
+            cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
+            vars[i] = (self.get_var(i, True), self.get_var(i))
+
+        self._output_results(vars)
+
+    def _output_results(self, vars, *misc_pars):
         for i in range(0, self.sv_samples):
             out = []
 
@@ -550,8 +585,18 @@ class SDE(object):
             if self.scan_var is not None:
                 out.append(self._sv[i*self.options.paths])
 
-            for j in range(0, len(self.vec)):
-                out.extend(get_var(self, j, i*self.options.paths, (i+1)*self.options.paths))
+            for func, req_vars in self.req_output:
+                args = map(lambda x: vars[x], req_vars)
+                if args and type(args[0]) is tuple:
+                    args = map(lambda x:
+                        (x[0][i*self.options.paths:(i+1)*self.options.paths],
+                         x[1][i*self.options.paths:(i+1)*self.options.paths]), args)
+                else:
+                    args = map(lambda x:
+                            x[i*self.options.paths:(i+1)*self.options.paths],
+                            args)
+
+                out.extend(func(self, *args))
 
             self.output.data(out)
 

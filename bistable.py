@@ -33,14 +33,17 @@ code = """
     dx1 = -psd * sinf(x0) - gamma_ * x1 + force;
 """
 
-ns_map = {1: ['ns']}
+noise_map = {1: ['ns']}
+period_map = {0: (2.0 * numpy.pi, 10)}
 
-sde_ = sde.SDE(code, params, global_vars, 2, 1,
-        ns_map, {0: (2.0 * numpy.pi, 10)})
+sde_ = sde.SDE(code, params, global_vars, 2, 1, noise_map, period_map)
 if not sde_.parse_args():
     sys.exit(1)
 
+output = {'path': [(sde.avg_moments, [0])],
+          'summary': [(sde.diffusion_coefficient, [0])]}
+
 sde_.prepare(sde.SRK2, init_vector)
-sde_.simulate(calculated_params)
+sde_.simulate(output, calculated_params)
 
 

@@ -36,8 +36,11 @@ sdei = sde.SDE(code, sim_params, global_vars, 2, 1, ns_map)
 if not sdei.parse_args():
 	sys.exit(1)
 
+output = {'path': [(sde.avg_moments, [0])],
+          'summary': [(sde.drift_velocity, [0])]}
+
 sdei.prepare(sde.SRK2, init_vector)
-sdei.simulate(calculated_params, freq_var='omega')
+sdei.simulate(output, calculated_params, freq_var='omega')
 
 
 
