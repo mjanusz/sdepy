@@ -23,21 +23,21 @@ sim_params = [('force', 'DC bias current'),
 			  ('d0', 'noise strength'),
 			  ('amp', 'AC drive amplitude')]
 
-mod_vars = ['ns']
+global_vars = ['ns']
 
 code = """
 	dx0 = x1;
 	dx1 = -2.0f * PI * cosf(2.0f * PI * x0) + amp * cosf(omega * t) + force - gam * x1;
 """
 
-ns_map = [[0], ['ns']];
+ns_map = {1: ['ns']}
 
-sdei = sde.SDE(sim_params, mod_vars)
+sdei = sde.SDE(code, sim_params, global_vars, 2, 1, ns_map)
 if not sdei.parse_args():
 	sys.exit(1)
 
-sdei.cuda_prep_gen(2, init_vector, 1, ns_map, code)
-sdei.cuda_run(64, calculated_params, 'omega')
+sdei.prepare(sde.SRK2, init_vector)
+sdei.simulate(calculated_params, freq_var='omega')
 
 
 

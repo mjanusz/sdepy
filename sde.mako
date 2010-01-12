@@ -82,11 +82,13 @@ __global__ void AdvanceSim(unsigned int *rng_state,
 		## Propagation.
 		%for i in range(0, rhs_vars):
 			xim${i} = x${i} + xt${i} * dt
-			%for j, n in enumerate(noise_strength_map[i]):
-				%if n != 0.0:
-					+ ${n}*n${j};
-				%endif
-			%endfor
+			%if i in noise_strength_map:
+				%for j, n in enumerate(noise_strength_map[i]):
+					%if n != 0.0:
+						+ ${n}*n${j};
+					%endif
+				%endfor
+			%endif
 			;
 		%endfor
 		t = ct + i*dt;
@@ -112,8 +114,8 @@ __global__ void AdvanceSim(unsigned int *rng_state,
 		## Propagation.
 		%for i in range(0, rhs_vars):
 			x${i} += 0.5f*dt * (xt${i} + xtt${i})
-			%for j, n in enumerate(noise_strength_map[i]):
-				%if n != 0.0:
+			%if i in noise_strength_map:
+				%for j, n in enumerate(noise_strength_map[i]):
 					%if j == noises-1 and noises % 2:
 						## Reuse a noise already calculated during the
 						## first set of calls to bm_trans.
@@ -121,8 +123,8 @@ __global__ void AdvanceSim(unsigned int *rng_state,
 					%else:
 						+ ${n}*n${j}
 					%endif
-				%endif
-			%endfor
+				%endfor
+			%endif
 			;
 		%endfor
 		t = ct + i*dt;

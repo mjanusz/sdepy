@@ -21,26 +21,25 @@ def calculated_params(sdei):
     gam = sdei.get_param('gamma_')
     sdei.set_param('ns', numpy.float32(math.sqrt(sdei.options.d0 * sdei.dt * 2.0 * gam)))
 
-sim_params = [('force', 'DC bias current'),
-              ('gamma_', 'damping constant'),
-              ('psd', 'potential strenght'),
-              ('d0', 'noise strength')]
+params = [('force', 'DC bias current'),
+          ('gamma_', 'damping constant'),
+          ('psd', 'potential strenght'),
+          ('d0', 'noise strength')]
 
-mod_vars = ['ns']
+global_vars = ['ns']
 
 code = """
     dx0 = x1;
     dx1 = -psd * sinf(x0) - gamma_ * x1 + force;
 """
 
-ns_map = [[0], ['ns']];
+ns_map = {1: ['ns']}
 
-sdei = sde.SDE(sim_params, mod_vars)
-if not sdei.parse_args():
+sde_ = sde.SDE(code, params, global_vars, 2, 1, ns_map)
+if not sde_.parse_args():
     sys.exit(1)
 
-sdei.cuda_prep_gen(2, init_vector, 1, ns_map, code)
-sdei.cuda_run(64, calculated_params)
-
+sde_.prepare(sde.SRK2, init_vector)
+sde_.simulate(calculated_params)
 
 
