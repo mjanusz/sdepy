@@ -35,7 +35,8 @@ code = """
 
 ns_map = {1: ['ns']}
 
-sde_ = sde.SDE(code, params, global_vars, 2, 1, ns_map)
+sde_ = sde.SDE(code, params, global_vars, 2, 1,
+        ns_map, {0: (2.0 * numpy.pi, 10)})
 if not sde_.parse_args():
     sys.exit(1)
 
