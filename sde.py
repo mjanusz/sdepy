@@ -3,7 +3,7 @@ import os
 import pwd
 import sys
 
-from optparse import OptionParser, OptionValueError
+from optparse import OptionParser, OptionValueError, Values
 
 import numpy
 
@@ -33,7 +33,9 @@ def diffusion_coefficient(sde, *args):
 
         deff1 = numpy.average(numpy.square(b)) - numpy.average(b)**2
         deff2 = numpy.average(numpy.square(a)) - numpy.average(a)**2
-        ret.append((deff1 - deff2) / (2.0 * (sde.sim_t - sde.start_t)))
+#        ret.append((deff1 - deff2) / (2.0 * (sde.sim_t - sde.start_t)))
+        ret.append(deff1 / (2.0 * sde.sim_t))
+        ret.append(deff2 / (2.0 * sde.start_t))
 
     return ret
 
@@ -115,7 +117,6 @@ class SRK2(SolverGenerator):
 
 
 class TextOutput(object):
-
     def __init__(self, sde):
         self.sde = sde
 
@@ -145,8 +146,21 @@ class TextOutput(object):
 
         print
 
-class HDF5Output(object):
+class LoggerOutput(object):
+    def __init__(self, sde):
+        self.sde = sde
+        self.log = []
 
+    def finish_block(self):
+        pass
+
+    def data(self, pars):
+        self.log.append(pars)
+
+    def header(self):
+        pass
+
+class HDF5Output(object):
     def __init__(self, sde):
         self.sde = sde
         import tables
@@ -212,7 +226,8 @@ class SDE(object):
         self.parser.add_option('--simperiods', dest='simperiods', help='number of periods in the simulation', type='int', action='store', default=2000)
         self.parser.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
         self.parser.add_option('--seed', dest='seed', help='RNG seed', type='int', action='store', default=None)
-        self.parser.add_option('--output_format', dest='oformat', help='output file format', type='choice', choices=['text', 'hdf_expanded', 'hdf_nested'], action='store', default='text')
+        self.parser.add_option('--output_format', dest='oformat', help='output file format', type='choice',
+                choices=['text', 'hdf_expanded', 'hdf_nested', 'logger'], action='store', default='text')
         self.parser.add_option('--save_src', dest='save_src', help='save the generated source to FILE', metavar='FILE',
                                type='string', action='store', default=None)
         self.parser.add_option('--precision', dest='precision', help='precision of the floating-point numbers (single, double)', type='choice', choices=['single', 'double'], default='single')
@@ -256,8 +271,13 @@ class SDE(object):
                 raise ValueError('The number of noise strengths for variable %s'
                     'has to be equal to %d.' % (k, num_noises))
 
-    def parse_args(self):
-        self.options, self.args = self.parser.parse_args()
+    def parse_args(self, args=None):
+        if args is None:
+            args = sys.argv
+
+        self.options = Values(self.parser.defaults)
+        self.parser.parse_args(args, self.options)
+
         opt_ok = True
         for name, hs in self.sim_params:
             if self.options.__dict__[name] == None:
@@ -271,6 +291,8 @@ class SDE(object):
 
         if self.options.oformat == 'text':
             self.output = TextOutput(self)
+        elif self.options.oformat ==  'logger':
+            self.output = LoggerOutput(self)
         else:
             self.output = HDF5Output(self)
 
