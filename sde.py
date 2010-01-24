@@ -245,6 +245,8 @@ class SDE(object):
                 choices=['text', 'hdf_expanded', 'hdf_nested', 'logger'], action='store', default='text')
         self.parser.add_option('--save_src', dest='save_src', help='save the generated source to FILE', metavar='FILE',
                                type='string', action='store', default=None)
+        self.parser.add_option('--use_src', dest='use_src', help='use FILE instead of the automatically generated code',
+                metavar='FILE', type='string', action='store', default=None)
         self.parser.add_option('--precision', dest='precision', help='precision of the floating-point numbers (single, double)', type='choice', choices=['single', 'double'], default='single')
         self.parser.add_option('--rng', dest='rng', help='PRNG to use', type='choice', choices=RNG_STATE.keys(), default='kiss32')
         self.parser.add_option('--noformat_src', dest='format_src', help='do not format the generated source code', action='store_false', default=True)
@@ -357,11 +359,15 @@ class SDE(object):
         else:
             scan_set = set([])
 
-        kernel_source = algorithm.get_source(self,
-                set(self.global_vars) - set(['dt', 'samples']), scan_set)
+        if self.options.use_src:
+            with open(self.options.use_src, 'r') as file:
+                kernel_source = file.read()
+        else:
+            kernel_source = algorithm.get_source(self,
+                    set(self.global_vars) - set(['dt', 'samples']), scan_set)
 
-        if self.options.precision == 'double':
-            kernel_source = _convert_to_double(kernel_source)
+            if self.options.precision == 'double':
+                kernel_source = _convert_to_double(kernel_source)
 
         if self.options.save_src is not None:
             with open(self.options.save_src, 'w') as file:
