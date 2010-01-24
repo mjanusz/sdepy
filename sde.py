@@ -139,6 +139,7 @@ class TextOutput(object):
         print ' '.join(rep)
 
     def header(self):
+        print '# %s' % ' '.join(sys.argv)
         if self.sde.options.seed is not None:
             print '# seed = %d' % self.sde.options.seed
         print '# sim periods = %d' % self.sde.options.simperiods
