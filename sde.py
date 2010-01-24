@@ -18,7 +18,7 @@ from mako.lookup import TemplateLookup
 RNG_STATE = {
     'xorshift32': 1,
     'kiss32': 4,
-    'kiss': 4,
+    'nr32': 4,
 }
 
 def drift_velocity(sde, *args):

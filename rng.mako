@@ -41,22 +41,29 @@ __device__ float rng_kiss32(unsigned int *x, unsigned int *y,
 }
 %endif
 
-%if rng == 'kiss':
-__device__ float rng_kiss(unsigned int *x, unsigned int *y,
-		unsigned int *z, unsigned int *c)
+%if rng == 'nr32':
+// 32-bit PRNG from Numerical Recipes, 3rd Ed.
+// Period: 3.11 * 10^37
+__device__ float rng_nr32(unsigned int *u, unsigned int *v,
+		unsigned int *w1, unsigned int *w2)
 {
-	unsigned long long t;
-	unsigned long long a = 698769069ULL;
+	unsigned int x, y;
 
-	*x = 69069 * *x + 12345;
-	*y ^= (*y << 13);
-	*y ^= (*y >> 17);
-	*y ^= (*y << 5);
-	t = a * *z + *c;
+	*u = *u * 2891336453U + 1640531513U;
+	*v ^= *v >> 13;
+	*v ^= *v << 17;
+	*v ^= *v >> 5;
+	*w1 = 33378 * (*w1 & 0xffff) + (*w1 >> 16);
+	*w2 = 57225 * (*w2 & 0xffff) + (*w2 >> 16);
 
-	*c = (t >> 32);
+	x = *u ^ (*u << 9);
+	x ^= x >> 17;
+	x ^= x << 6;
 
-	return *x + *y + t;
+	y = *w1 ^ (*w1 << 17);
+	y ^= y >> 15;
+	y ^= y << 5;
+	return ((x + *v) ^ (y + *w2)) * 2.328306e-10f;
 }
 %endif
 
