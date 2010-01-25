@@ -255,6 +255,9 @@ class SDE(object):
         self.parser.add_option('--precision', dest='precision', help='precision of the floating-point numbers (single, double)', type='choice', choices=['single', 'double'], default='single')
         self.parser.add_option('--rng', dest='rng', help='PRNG to use', type='choice', choices=RNG_STATE.keys(), default='kiss32')
         self.parser.add_option('--noformat_src', dest='format_src', help='do not format the generated source code', action='store_false', default=True)
+        self.parser.add_option('--no-fast-math', dest='fast_math',
+                help='do not use faster intrinsic mathematical functions everywhere',
+                action='store_false', default=True)
 
         # List of single-valued system parameters
         self.parser.par_multi = []
@@ -414,10 +417,16 @@ class SDE(object):
         # The use of fast math below will result in certain mathematical functions
         # being automaticallky replaced with their faster counterparts prefixed with
         # __, e.g. __sinf().
-        if type(sources) is str:
-            self.mod = pycuda.compiler.SourceModule(sources, options=['--use_fast_math'])
+
+        if self.options.fast_math:
+            options=['--use_fast_math']
         else:
-            self.mod = pycuda.compiler.SourceModule(_get_module_source(*sources), options=['--use_fast_math'])
+            options=[]
+
+        if type(sources) is str:
+            self.mod = pycuda.compiler.SourceModule(sources, options=options)
+        else:
+            self.mod = pycuda.compiler.SourceModule(_get_module_source(*sources), options=options)
         self.advance_sim = self.mod.get_function(sim_func)
 
     def _sim_prep_const(self):
