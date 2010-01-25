@@ -16,7 +16,7 @@ from mako.lookup import TemplateLookup
 
 # Map RNG name to number of uint state variables.
 RNG_STATE = {
-    'xorshift32': 1,
+    'xs32': 1,
     'kiss32': 4,
     'nr32': 4,
 }

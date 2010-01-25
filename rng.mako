@@ -10,8 +10,8 @@
  * [0;1] range.
  */
 
-%if rng == 'xorshift32':
-__device__ float rng_xorshift32(unsigned int *state)
+%if rng == 'xs32':
+__device__ float rng_xs32(unsigned int *state)
 {
 	unsigned int x = *state;
 
