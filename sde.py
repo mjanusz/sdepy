@@ -64,17 +64,19 @@ def _convert_to_double(src):
 def _parse_range(option, opt_str, value, parser):
     vals = value.split(':')
 
+    # Use higher precision (float64) below.   If single precision is requested, the values
+    # will be automatically degraded to float32 later on.
     if len(vals) == 1:
-        setattr(parser.values, option.dest, numpy.float32(value))
+        setattr(parser.values, option.dest, numpy.float64(value))
         parser.par_single.append(option.dest)
     elif len(vals) == 3:
         start = float(vals[0])
         stop = float(vals[1])
         step = (stop-start) / (int(vals[2])-1)
-        setattr(parser.values, option.dest, numpy.arange(start, stop+0.999*step, step, numpy.float32))
+        setattr(parser.values, option.dest, numpy.arange(start, stop+0.999*step, step, numpy.float64))
         parser.par_multi.append(option.dest)
     else:
-        raise OptionValueError('"%s" has to be a single value or a range of the form \'start,stop,steps\'' % opt_str)
+        raise OptionValueError('"%s" has to be a single value or a range of the form \'start:stop:steps\'' % opt_str)
 
 def _get_module_source(*files):
     """Load multiple .cu files and join them into a string."""
@@ -343,16 +345,14 @@ class SDE(object):
 
         # No variable to scan over.
         if max_i < 0:
-            return (None, (0.0, 0.0, 1))
+            return None
 
         # Remove this parameter from the list of parameters with multiple
         # values, so that we don't loop over it when running the simulation.
         del self.parser.par_multi[max_i]
         self.global_vars.remove(max_par)
 
-        return (max_par, (self.options.__dict__[max_par][0],
-                          self.options.__dict__[max_par][-1],
-                          max))
+        return max_par
 
     def prepare(self, algorithm, init_vectors):
         """Prepare a SDE simulation.
@@ -360,7 +360,7 @@ class SDE(object):
         :param algorithm: the SDE solver to use, sublass of SDESolver
         :param init_vectors: a callable that will be used to set the initial conditions
         """
-        scan_var, scan_var_range = self._find_cuda_scan_par()
+        scan_var = self._find_cuda_scan_par()
 
         if scan_var is not None:
             scan_set = set([scan_var])
@@ -384,20 +384,33 @@ class SDE(object):
             if self.options.format_src:
                 os.system(self.format_cmd.format(file=self.options.save_src))
 
-        return self.cuda_prep(init_vectors, kernel_source, scan_var, scan_var_range)
+        return self.cuda_prep(init_vectors, kernel_source, scan_var)
+
+    @property
+    def scan_var_size(self):
+        if self.scan_var is not None:
+            return len(getattr(self.options, self.scan_var))
+        else:
+            return 1
+
+    @property
+    def scan_values(self):
+        if self.scan_var is not None:
+            return getattr(self.options, self.scan_var)
+        else:
+            return None
 
     def cuda_prep(self, init_vectors, sources, scan_var,
-                  scan_var_range, sim_func='AdvanceSim'):
+                  sim_func='AdvanceSim'):
         """Prepare a SDE simulation for execution using CUDA.
 
         init_vectors: a function which takes an instance of this class and the
             variable number as arguments and returns an initialized vector of
             size num_threads
         sources: list of source code files for the simulation
-        scan_var_range: a tuple (start, end, steps) specifying the values of
-            the scan variable.  The scan variable is a system parameter for
-            whose multiple values results are obtained in a single CUDA kernel
-            launch)
+        scan_var: name of the scan variable.  The scan variable is a system
+            parameter for whose multiple values results are obtained in a
+            single CUDA kernel launch)
         sim_func: name of the kernel advacing the simulation in time
         """
         if self.options.seed is not None:
@@ -405,8 +418,7 @@ class SDE(object):
 
         self.init_vectors = init_vectors
         self.scan_var = scan_var
-        self.sv_start, self.sv_end, self.sv_samples = scan_var_range
-        self.num_threads = self.sv_samples * self.options.paths
+        self.num_threads = self.scan_var_size * self.options.paths
         self._sim_prep_mod(sources, sim_func)
         self._sim_prep_const()
         self._sim_prep_var()
@@ -444,7 +456,7 @@ class SDE(object):
             # If a variable is not in the dictionary, then it is automatically
             # calculated and will be set at a later stage.
             if par in self._gpu_sym:
-                cuda.memcpy_htod(self._gpu_sym[par], self.options.__dict__[par])
+                cuda.memcpy_htod(self._gpu_sym[par], self.float(self.options.__dict__[par]))
 
     def _sim_prep_var(self):
         self.vec = []
@@ -466,21 +478,13 @@ class SDE(object):
             return
 
         # Initialize the scan variable.
-        tmp = []
-        if self.sv_samples == 1:
-            tmp = [self.sv_start, ] * self.options.paths
-        else:
-            eps = (self.sv_end - self.sv_start) / (self.sv_samples-1)
-            for i in numpy.arange(self.sv_start, self.sv_end + eps, eps):
-                tmp.extend([i, ] * self.options.paths)
-
-        self._sv = numpy.array(tmp, dtype=self.float)
+        self._sv = numpy.kron(self.scan_values, numpy.ones(self.options.paths)).astype(self.float)
         self._gpu_sv = cuda.mem_alloc(self._sv.nbytes)
         cuda.memcpy_htod(self._gpu_sv, self._sv)
 
     def set_param(self, name, val):
         self._sim_sym[name] = val
-        cuda.memcpy_htod(self._gpu_sym[name], val)
+        cuda.memcpy_htod(self._gpu_sym[name], self.float(val))
 
     def get_param(self, name):
         try:
@@ -546,9 +550,9 @@ class SDE(object):
 
             # Loop over all values of a specific parameter.
             for val in self.options.__dict__[par]:
-                self._sim_sym[par] = val
+                self._sim_sym[par] = self.float(val)
                 if par in self.global_vars:
-                    cuda.memcpy_htod(self._gpu_sym[par], val)
+                    cuda.memcpy_htod(self._gpu_sym[par], self.float(val))
                 self._run_nested(range_pars[1:], freq_var, calculated_params)
 
     def _run_kernel(self, freq_var, calculated_params):
@@ -646,7 +650,7 @@ class SDE(object):
         self._output_results(vars)
 
     def _output_results(self, vars, *misc_pars):
-        for i in range(0, self.sv_samples):
+        for i in range(0, self.scan_var_size):
             out = []
 
             for par in self.parser.par_multi:
