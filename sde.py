@@ -132,35 +132,45 @@ class SRK2(SolverGenerator):
 class TextOutput(object):
     def __init__(self, sde):
         self.sde = sde
+        if sde.options.output is not None:
+            self.out = open(sde.options.output, 'w')
+        else:
+            self.out = sys.stdout
 
     def finish_block(self):
         print
 
     def data(self, pars):
         rep = ['%15.8e' % x for x in pars]
-        print ' '.join(rep)
+        self._print(' '.join(rep))
+
+    def _print(self, val, nl=True):
+        if nl:
+            print >>self.out, val
+        else:
+            print >>self.out, val,
 
     def header(self):
-        print '# %s' % ' '.join(sys.argv)
+        self._print('# %s' % ' '.join(sys.argv))
         if self.sde.options.seed is not None:
-            print '# seed = %d' % self.sde.options.seed
-        print '# sim periods = %d' % self.sde.options.simperiods
-        print '# transient periods = %d' % self.sde.options.transients
-        print '# samples = %d' % self.sde.options.samples
-        print '# paths = %d' % self.sde.options.paths
-        print '# spp = %d' % self.sde.options.spp
+            self._print('# seed = %d' % self.sde.options.seed)
+        self._print('# sim periods = %d' % self.sde.options.simperiods)
+        self._print('# transient periods = %d' % self.sde.options.transients)
+        self._print('# samples = %d' % self.sde.options.samples)
+        self._print('# paths = %d' % self.sde.options.paths)
+        self._print('# spp = %d' % self.sde.options.spp)
         for par in self.sde.parser.par_single:
-            print '# %s = %f' % (par, self.sde.options.__dict__[par])
-        print '#',
+            self._print('# %s = %f' % (par, self.sde.options.__dict__[par]))
+        self._print('#', False)
         for par in self.sde.parser.par_multi:
-            print par,
+            self._print(par, False)
 
         if self.sde.scan_var is not None:
-            print '%s' % self.sde.scan_var,
+            self._print('%s' % self.sde.scan_var, False)
         for i in range(0, self.sde.num_vars):
-            print 'x%d' % i,
+            self._print('x%d' % i, False)
 
-        print
+        self._print('')
 
 class LoggerOutput(object):
     def __init__(self, sde):
@@ -246,20 +256,23 @@ class SDE(object):
         self.parser.add_option('--paths', dest='paths', help='number of paths to sample', type='int', action='store', default=256)
         self.parser.add_option('--transients', dest='transients', help='number of periods to ignore because of transients', type='int', action='store', default=200)
         self.parser.add_option('--simperiods', dest='simperiods', help='number of periods in the simulation', type='int', action='store', default=2000)
-        self.parser.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
         self.parser.add_option('--seed', dest='seed', help='RNG seed', type='int', action='store', default=None)
-        self.parser.add_option('--output_format', dest='oformat', help='output file format', type='choice',
-                choices=['text', 'hdf_expanded', 'hdf_nested', 'logger'], action='store', default='text')
+        self.parser.add_option('--precision', dest='precision', help='precision of the floating-point numbers (single, double)', type='choice', choices=['single', 'double'], default='single')
+        self.parser.add_option('--rng', dest='rng', help='PRNG to use', type='choice', choices=RNG_STATE.keys(), default='kiss32')
+        self.parser.add_option('--no-fast-math', dest='fast_math',
+                help='do not use faster intrinsic mathematical functions everywhere',
+                action='store_false', default=True)
+
         self.parser.add_option('--save_src', dest='save_src', help='save the generated source to FILE', metavar='FILE',
                                type='string', action='store', default=None)
         self.parser.add_option('--use_src', dest='use_src', help='use FILE instead of the automatically generated code',
                 metavar='FILE', type='string', action='store', default=None)
-        self.parser.add_option('--precision', dest='precision', help='precision of the floating-point numbers (single, double)', type='choice', choices=['single', 'double'], default='single')
-        self.parser.add_option('--rng', dest='rng', help='PRNG to use', type='choice', choices=RNG_STATE.keys(), default='kiss32')
         self.parser.add_option('--noformat_src', dest='format_src', help='do not format the generated source code', action='store_false', default=True)
-        self.parser.add_option('--no-fast-math', dest='fast_math',
-                help='do not use faster intrinsic mathematical functions everywhere',
-                action='store_false', default=True)
+
+        self.parser.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
+        self.parser.add_option('--output_format', dest='oformat', help='output file format', type='choice',
+                choices=['text', 'hdf_expanded', 'hdf_nested', 'logger'], action='store', default='text')
+        self.parser.add_option('--output', dest='output', help='base output filename', type='string', action='store', default=None)
 
         # List of single-valued system parameters
         self.parser.par_multi = []
