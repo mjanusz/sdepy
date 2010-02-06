@@ -1,3 +1,5 @@
+import copy
+import cPickle as pickle
 import math
 import os
 import pwd
@@ -285,6 +287,15 @@ class SDE(object):
                 choices=['text', 'hdf_expanded', 'hdf_nested', 'logger'], action='store', default='text')
         self.parser.add_option('--output', dest='output', help='base output filename', type='string', action='store', default=None)
 
+        self.parser.add_option('--dump_state', dest='dump_filename', help='save state of the simulation to FILE after it is completed',
+                metavar='FILE', type='string', action='store', default=None)
+        self.parser.add_option('--restore_state', dest='restore_filename', help='restore state of the solver from FILE',
+                metavar='FILE', type='string', action='store', default=None)
+        self.parser.add_option('--resume', dest='resume', help='resume simulation from a saved checkpoint',
+                action='store_true', default=False)
+        self.parser.add_option('--continue', dest='continue_', help='continue a finished simulation',
+                action='store_true', default=False)
+
         # List of single-valued system parameters
         self.parser.par_multi = []
         # List of multi-valued system parameters
@@ -299,6 +310,8 @@ class SDE(object):
         else:
             self.periodic_map = periodic_map
         self.code = code
+
+        self.state_results = []
 
         self._sim_sym = {}
         self._gpu_sym = {}
@@ -342,6 +355,13 @@ class SDE(object):
         else:
             self.float = numpy.float64
 
+        if (self.options.resume or self.options.continue_) and self.options.restore_filename is None:
+            print 'The resume and continue modes require specifying a state file with --restore_state.'
+            opt_ok = False
+
+        if opt_ok and self.options.restore_filename is not None:
+            self.load_state()
+
         return opt_ok
 
     # TODO: add support for scanning over a set of parameters
@@ -377,7 +397,10 @@ class SDE(object):
         :param algorithm: the SDE solver to use, sublass of SDESolver
         :param init_vectors: a callable that will be used to set the initial conditions
         """
-        scan_var = self._find_cuda_scan_par()
+        if not (self.options.resume or self.options.continue_):
+            scan_var = self._find_cuda_scan_par()
+        else:
+            scan_var = self.scan_var
 
         if scan_var is not None:
             scan_set = set([scan_var])
@@ -430,7 +453,7 @@ class SDE(object):
             single CUDA kernel launch)
         sim_func: name of the kernel advacing the simulation in time
         """
-        if self.options.seed is not None:
+        if self.options.seed is not None and not (self.options.resume or self.options.continue_):
             numpy.random.seed(self.options.seed)
 
         self.init_vectors = init_vectors
@@ -473,6 +496,13 @@ class SDE(object):
             if par in self._gpu_sym:
                 cuda.memcpy_htod(self._gpu_sym[par], self.float(self.options.__dict__[par]))
 
+    def _init_rng(self):
+        # Initialize the RNG seeds.
+        self._rng_state = numpy.random.randint(0, 2**32-1, self.num_threads * RNG_STATE[self.options.rng])
+        self._rng_state = self._rng_state.astype(numpy.uint32)
+        self._gpu_rng_state = cuda.mem_alloc(self._rng_state.nbytes)
+        cuda.memcpy_htod(self._gpu_rng_state, self._rng_state)
+
     def _sim_prep_var(self):
         self.vec = []
         self._gpu_vec = []
@@ -483,17 +513,12 @@ class SDE(object):
             self.vec.append(vt)
             self._gpu_vec.append(cuda.mem_alloc(vt.nbytes))
 
-        # Initialize the RNG seeds.
-        self._rng_state = numpy.random.randint(0, 2**32-1, self.num_threads * RNG_STATE[self.options.rng])
-        self._rng_state = self._rng_state.astype(numpy.uint32)
-        self._gpu_rng_state = cuda.mem_alloc(self._rng_state.nbytes)
-        cuda.memcpy_htod(self._gpu_rng_state, self._rng_state)
-
         if self.scan_var is None:
             return
 
         # Initialize the scan variable.
-        self._sv = numpy.kron(self.scan_values, numpy.ones(self.options.paths)).astype(self.float)
+        if not self.options.resume and not self.options.continue_:
+            self._sv = numpy.kron(self.scan_values, numpy.ones(self.options.paths)).astype(self.float)
         self._gpu_sv = cuda.mem_alloc(self._sv.nbytes)
         cuda.memcpy_htod(self._gpu_sv, self._sv)
 
@@ -522,6 +547,16 @@ class SDE(object):
             return vec[i] + self.periodic_map[i][0] * nx[i]
         else:
             return vec[i]
+
+    @property
+    def max_sim_iter(self):
+        return int(self.options.simperiods * self.options.spp / self.options.samples)+1
+
+    def iter_to_sim_time(self, iter_):
+        return iter_ * self.dt * self.options.samples
+
+    def sim_time_to_iter(self, time_):
+        return int(time_ / (self.dt * self.options.samples))
 
     def simulate(self, req_output, calculated_params, block_size=64, freq_var=None):
         """Run a CUDA SDE simulation.
@@ -564,12 +599,31 @@ class SDE(object):
 
         arg_types += [self.float]
         self.advance_sim.prepare(arg_types, block=(block_size, 1, 1))
+        self._scan_iter = 0
         self._run_nested(self.parser.par_multi, freq_var, calculated_params)
 
+        if self.options.dump_filename is not None:
+            self.dump_state()
+
     def _run_nested(self, range_pars, freq_var, calculated_params):
-        # No more parameters to loop over.
+        # No more parameters to loop over, time to actually run the kernel.
         if not range_pars:
-            self._run_kernel(freq_var, calculated_params)
+            # Reinitialize the RNG here so that there is no interdependence
+            # between runs.  This also guarantees that the resume/continue
+            # modes can work correctly in the case of scan over 2+ parameters.
+            self._init_rng()
+
+            # In the resume mode, we skip all the computations that have already
+            # been completed and thus are saved in self.state_results.
+            if not self.options.resume:
+                self._run_kernel(freq_var, calculated_params)
+            elif (self._scan_iter == len(self.state_results)-1 and
+                    self.state_results[-1][0] < self.iter_to_sim_time(self.max_sim_iter)):
+                self._run_kernel(freq_var, calculated_params)
+            elif self._scan_iter > len(self.state_results)-1:
+                self._run_kernel(freq_var, calculated_params)
+
+            self._scan_iter += 1
         else:
             par = range_pars[0]
 
@@ -591,23 +645,9 @@ class SDE(object):
 
         calculated_params(self)
 
-        # Reinitialize the positions.
-        self.vec = []
-        for i in range(0, self.num_vars):
-            # TODO: The arguments should include the current values of the
-            # system parameters.
-            vt = self.init_vectors(self, i).astype(self.float)
-            self.vec.append(vt)
-            cuda.memcpy_htod(self._gpu_vec[i], vt)
-
         kernel_args = [self._gpu_rng_state] + self._gpu_vec
         if self.scan_var is not None:
             kernel_args += [self._gpu_sv]
-
-        # Prepare an array for number of periods for periodic variables.
-        self.vec_nx = {}
-        for i, v in self.periodic_map.iteritems():
-            self.vec_nx[i] = numpy.zeros_like(self.vec[i]).astype(numpy.int64)
 
         # Prepare an array for initial value of the variables (after
         # transients).
@@ -617,9 +657,46 @@ class SDE(object):
         else:
             transient = True
             every = False
-            self.vec_start = []
+
+        if (self.options.continue_ or
+                (self.options.resume and self._scan_iter < len(self.state_results))):
+            self.vec = self.state_results[self._scan_iter][1]
+            self.vec_nx = self.state_results[self._scan_iter][2]
+            self._rng_state = self.state_results[self._scan_iter][3]
+            cuda.memcpy_htod(self._gpu_rng_state, self._rng_state)
             for i in range(0, self.num_vars):
-                self.vec_start.append(numpy.zeros_like(self.vec[i]))
+                cuda.memcpy_htod(self._gpu_vec[i], self.vec[i])
+
+            self.sim_t = self.state_results[self._scan_iter][0]
+
+            if self.options.omode == 'summary':
+                self.start_t = self.state_results[self._scan_iter][4]
+                self.vec_start = self.state_results[self._scan_iter][5]
+                self.vec_start_nx = self.state_results[self._scan_iter][6]
+
+                if self.sim_t >= self.options.transients * period:
+                    transient = False
+        else:
+            # Reinitialize the positions.
+            self.vec = []
+            for i in range(0, self.num_vars):
+                # TODO: The arguments should include the current values of the
+                # system parameters.
+                vt = self.init_vectors(self, i).astype(self.float)
+                self.vec.append(vt)
+                cuda.memcpy_htod(self._gpu_vec[i], vt)
+
+            # Prepare an array for number of periods for periodic variables.
+            self.vec_nx = {}
+            for i, v in self.periodic_map.iteritems():
+                self.vec_nx[i] = numpy.zeros_like(self.vec[i]).astype(numpy.int64)
+
+            if transient:
+                self.vec_start = []
+                for i in range(0, self.num_vars):
+                    self.vec_start.append(numpy.zeros_like(self.vec[i]))
+
+            self.sim_t = 0.0
 
         def fold_variables(iter_, need_copy):
             for i, (period, freq) in self.periodic_map.iteritems():
@@ -632,11 +709,14 @@ class SDE(object):
                     self.vec[i] = numpy.remainder(self.vec[i], period)
                     cuda.memcpy_htod(self._gpu_vec[i], self.vec[i])
 
+        init_iter = self.sim_time_to_iter(self.sim_t)
+
         # Actually run the simulation here.
-        for j in xrange(0, int(self.options.simperiods * self.options.spp / self.options.samples)+1):
-            self.sim_t = self.options.samples * j * self.dt
+        for j in xrange(init_iter, self.max_sim_iter):
+            self.sim_t = self.iter_to_sim_time(j)
             args = kernel_args + [numpy.float32(self.sim_t)]
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
+            self.sim_t += self.options.samples * self.dt
 
             if every:
                 fold_variables(j, True)
@@ -651,12 +731,12 @@ class SDE(object):
                 self.vec_start_nx = self.vec_nx.copy()
 
             fold_variables(j, True)
-            self.sim_t += self.options.samples * self.dt
 
         if not every:
             self.output_summary()
 
         self.output.finish_block('main')
+        self.save_block()
 
     def output_current(self):
         vars = {}
@@ -715,4 +795,91 @@ class SDE(object):
                 else:
                     self.output.data(v, out_name)
 
+    @property
+    def state(self):
+        """A dictionary representing the current state of the solver."""
+
+        names = ['sim_params', 'global_vars', 'num_vars', 'num_noises', 
+                'noise_map', 'periodic_map', 'code', 'options', 'float',
+                'scan_var']
+
+        ret = {}
+
+        for name in names:
+            ret[name] = getattr(self, name)
+
+        ret['par_single'] = self.parser.par_single
+        ret['par_multi'] = self.parser.par_multi
+
+        return ret
+
+    def save_block(self):
+        """Save the current block into the state of the solver if necessary."""
+
+        cuda.memcpy_dtoh(self._rng_state, self._gpu_rng_state)
+        for i in range(0, self.num_vars):
+            cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
+
+        if self.options.omode == 'path':
+            self.state_results.append((self.sim_t, copy.deepcopy(self.vec), self.vec_nx.copy(),
+                self._rng_state.copy()))
+        else:
+             self.state_results.append((self.sim_t, copy.deepcopy(self.vec), self.vec_nx.copy(),
+                self._rng_state.copy(), self.start_t, copy.deepcopy(self.vec_start),
+                self.vec_start_nx.copy()))
+
+    def dump_state(self):
+        """Dump the current state of the solver to a file.
+
+        This makes it possible to later restart the calculations from the saved
+        checkpoint using the :meth:`load_state` function.
+        """
+        state = self.state
+        state['results'] = self.state_results
+        state['numpy.random'] = numpy.random.get_state()
+
+        if self.scan_var is not None:
+            state['sv'] = self._sv.copy()
+
+        with open(self.options.dump_filename, 'w') as f:
+            pickle.dump(state, f, pickle.HIGHEST_PROTOCOL)
+
+    def load_state(self):
+        """Restore saved state of the solver.
+
+        After the state is restored, the simulation can be continued the standard
+        way, i.e. by calling :meth:`prepare` and :meth:`simulate`.
+        """
+        with open(self.options.restore_filename, 'r') as f:
+            state = pickle.load(f)
+
+        # The current options object will be overriden by the one saved in the
+        # checkpoint file.
+        new_options = self.options
+        for par, val in state.iteritems():
+            if par not in ['par_single', 'par_multi', 'results', 'numpy.random', 'sv']:
+                setattr(self, par, val)
+
+        self.parser.par_single = state['par_single']
+        self.parser.par_multi = state['par_multi']
+        self.state_results = state['results']
+
+        numpy.random.set_state(state['numpy.random'])
+
+        if 'sv' in state:
+            self._sv = state['sv']
+
+        # Options overridable from the command line.
+        overridable = ['resume', 'continue_', 'dump_state']
+
+        # If this is a continuation of a previous simulation, make output-related
+        # parameters overridable.
+        if new_options.continue_:
+            overridable.extend(['output', 'output_format', 'output_mode', 'simperiods'])
+            # TODO: This could potentially cause problems with transients if the original
+            # simulation was run in summary mode and the new one is in path mode.
+
+        for option in overridable:
+            if hasattr(new_options, option) and getattr(new_options, option) is not None:
+                setattr(self.options, option, getattr(new_options, option))
 
