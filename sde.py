@@ -3,6 +3,7 @@ import cPickle as pickle
 import math
 import os
 import pwd
+import signal
 import sys
 
 from optparse import OptionParser, OptionValueError, Values
@@ -56,6 +57,13 @@ def avg_moments(sde, *args):
         ret.append(numpy.average(numpy.square(arg)))
 
     return ret
+
+want_dump = False
+want_exit = False
+
+def _sighandler(signum, frame):
+    global want_dump, want_exit
+    want_dump = True
 
 def _convert_to_double(src):
     import re
@@ -600,6 +608,9 @@ class SDE(object):
         arg_types += [self.float]
         self.advance_sim.prepare(arg_types, block=(block_size, 1, 1))
         self._scan_iter = 0
+
+        signal.signal(signal.SIGUSR1, _sighandler)
+
         self._run_nested(self.parser.par_multi, freq_var, calculated_params)
 
         if self.options.dump_filename is not None:
@@ -613,15 +624,23 @@ class SDE(object):
             # modes can work correctly in the case of scan over 2+ parameters.
             self._init_rng()
 
+            # Calculate period and step size.
+            if freq_var is not None:
+                period = 2.0 * math.pi / self._sim_sym[freq_var]
+            else:
+                period = 1.0
+            self.dt = self.float(period / self.options.spp)
+            cuda.memcpy_htod(self._gpu_sym['dt'], self.dt)
+
             # In the resume mode, we skip all the computations that have already
             # been completed and thus are saved in self.state_results.
             if not self.options.resume:
-                self._run_kernel(freq_var, calculated_params)
+                self._run_kernel(calculated_params, period)
             elif (self._scan_iter == len(self.state_results)-1 and
                     self.state_results[-1][0] < self.iter_to_sim_time(self.max_sim_iter)):
-                self._run_kernel(freq_var, calculated_params)
+                self._run_kernel(calculated_params, period)
             elif self._scan_iter > len(self.state_results)-1:
-                self._run_kernel(freq_var, calculated_params)
+                self._run_kernel(calculated_params, period)
 
             self._scan_iter += 1
         else:
@@ -634,15 +653,7 @@ class SDE(object):
                     cuda.memcpy_htod(self._gpu_sym[par], self.float(val))
                 self._run_nested(range_pars[1:], freq_var, calculated_params)
 
-    def _run_kernel(self, freq_var, calculated_params):
-        # Calculate period and step size.
-        if freq_var is not None:
-            period = 2.0 * math.pi / self._sim_sym[freq_var]
-        else:
-            period = 1.0
-        self.dt = self.float(period / self.options.spp)
-        cuda.memcpy_htod(self._gpu_sym['dt'], self.dt)
-
+    def _run_kernel(self, calculated_params, period):
         calculated_params(self)
 
         kernel_args = [self._gpu_rng_state] + self._gpu_vec
@@ -711,6 +722,8 @@ class SDE(object):
 
         init_iter = self.sim_time_to_iter(self.sim_t)
 
+        global want_dump
+
         # Actually run the simulation here.
         for j in xrange(init_iter, self.max_sim_iter):
             self.sim_t = self.iter_to_sim_time(j)
@@ -731,6 +744,13 @@ class SDE(object):
                 self.vec_start_nx = self.vec_nx.copy()
 
             fold_variables(j, True)
+
+            if want_dump:
+                if self.options.dump_filename is not None:
+                    self.save_block()
+                    self.dump_state()
+                    del self.state_results[-1]
+                want_dump = False
 
         if not every:
             self.output_summary()
