@@ -6,7 +6,7 @@ import pwd
 import signal
 import sys
 
-from optparse import OptionParser, OptionValueError, Values
+from optparse import OptionGroup, OptionParser, OptionValueError, Values
 
 import numpy
 
@@ -64,6 +64,9 @@ want_exit = False
 def _sighandler(signum, frame):
     global want_dump, want_exit
     want_dump = True
+
+    if signum in [signal.SIGINT, signal.SIGQUIT, signal.SIGTERM]:
+        want_exit = True
 
 def _convert_to_double(src):
     import re
@@ -272,37 +275,46 @@ class SDE(object):
             remains below 48039.0f (see CUDA documentation).
         """
         self.parser = OptionParser()
-        self.parser.add_option('--spp', dest='spp', help='steps per period', metavar='DT', type='int', action='store', default=100)
-        self.parser.add_option('--samples', dest='samples', help='sample the position every N steps', metavar='N', type='int', action='store', default=100)
-        self.parser.add_option('--paths', dest='paths', help='number of paths to sample', type='int', action='store', default=256)
-        self.parser.add_option('--transients', dest='transients', help='number of periods to ignore because of transients', type='int', action='store', default=200)
-        self.parser.add_option('--simperiods', dest='simperiods', help='number of periods in the simulation', type='int', action='store', default=2000)
-        self.parser.add_option('--seed', dest='seed', help='RNG seed', type='int', action='store', default=None)
-        self.parser.add_option('--precision', dest='precision', help='precision of the floating-point numbers (single, double)', type='choice', choices=['single', 'double'], default='single')
-        self.parser.add_option('--rng', dest='rng', help='PRNG to use', type='choice', choices=RNG_STATE.keys(), default='kiss32')
-        self.parser.add_option('--no-fast-math', dest='fast_math',
+
+        group = OptionGroup(self.parser, 'SDE engine settings')
+        group.add_option('--spp', dest='spp', help='steps per period', metavar='DT', type='int', action='store', default=100)
+        group.add_option('--samples', dest='samples', help='sample the position every N steps', metavar='N', type='int', action='store', default=100)
+        group.add_option('--paths', dest='paths', help='number of paths to sample', type='int', action='store', default=256)
+        group.add_option('--transients', dest='transients', help='number of periods to ignore because of transients', type='int', action='store', default=200)
+        group.add_option('--simperiods', dest='simperiods', help='number of periods in the simulation', type='int', action='store', default=2000)
+        group.add_option('--seed', dest='seed', help='RNG seed', type='int', action='store', default=None)
+        group.add_option('--precision', dest='precision', help='precision of the floating-point numbers (single, double)', type='choice', choices=['single', 'double'], default='single')
+        group.add_option('--rng', dest='rng', help='PRNG to use', type='choice', choices=RNG_STATE.keys(), default='kiss32')
+        group.add_option('--no-fast-math', dest='fast_math',
                 help='do not use faster intrinsic mathematical functions everywhere',
                 action='store_false', default=True)
+        self.parser.add_option_group(group)
 
-        self.parser.add_option('--save_src', dest='save_src', help='save the generated source to FILE', metavar='FILE',
+        group = OptionGroup(self.parser, 'Debug settings')
+        group.add_option('--save_src', dest='save_src', help='save the generated source to FILE', metavar='FILE',
                                type='string', action='store', default=None)
-        self.parser.add_option('--use_src', dest='use_src', help='use FILE instead of the automatically generated code',
+        group.add_option('--use_src', dest='use_src', help='use FILE instead of the automatically generated code',
                 metavar='FILE', type='string', action='store', default=None)
-        self.parser.add_option('--noformat_src', dest='format_src', help='do not format the generated source code', action='store_false', default=True)
+        group.add_option('--noformat_src', dest='format_src', help='do not format the generated source code', action='store_false', default=True)
+        self.parser.add_option_group(group)
 
-        self.parser.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
-        self.parser.add_option('--output_format', dest='oformat', help='output file format', type='choice',
+        group = OptionGroup(self.parser, 'Output settings')
+        group.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
+        group.add_option('--output_format', dest='oformat', help='output file format', type='choice',
                 choices=['text', 'hdf_expanded', 'hdf_nested', 'logger'], action='store', default='text')
-        self.parser.add_option('--output', dest='output', help='base output filename', type='string', action='store', default=None)
+        group.add_option('--output', dest='output', help='base output filename', type='string', action='store', default=None)
+        self.parser.add_option_group(group)
 
-        self.parser.add_option('--dump_state', dest='dump_filename', help='save state of the simulation to FILE after it is completed',
+        group = OptionGroup(self.parser, 'Checkpointing settings')
+        group.add_option('--dump_state', dest='dump_filename', help='save state of the simulation to FILE after it is completed',
                 metavar='FILE', type='string', action='store', default=None)
-        self.parser.add_option('--restore_state', dest='restore_filename', help='restore state of the solver from FILE',
+        group.add_option('--restore_state', dest='restore_filename', help='restore state of the solver from FILE',
                 metavar='FILE', type='string', action='store', default=None)
-        self.parser.add_option('--resume', dest='resume', help='resume simulation from a saved checkpoint',
+        group.add_option('--resume', dest='resume', help='resume simulation from a saved checkpoint',
                 action='store_true', default=False)
-        self.parser.add_option('--continue', dest='continue_', help='continue a finished simulation',
+        group.add_option('--continue', dest='continue_', help='continue a finished simulation',
                 action='store_true', default=False)
+        self.parser.add_option_group(group)
 
         # List of single-valued system parameters
         self.parser.par_multi = []
@@ -335,10 +347,14 @@ class SDE(object):
         for par, desc in params:
             global_vars.append(par)
 
+        group = OptionGroup(self.parser, 'Simulation-specific settings')
+
         for name, help_string in params:
-            self.parser.add_option('--%s' % name, dest=name, action='callback',
+            group.add_option('--%s' % name, dest=name, action='callback',
                     callback=_parse_range, type='string', help=help_string,
                     default=None)
+
+        self.parser.add_option_group(group)
 
         for k, v in noise_map.iteritems():
             if len(v) != num_noises:
@@ -610,6 +626,10 @@ class SDE(object):
         self._scan_iter = 0
 
         signal.signal(signal.SIGUSR1, _sighandler)
+        signal.signal(signal.SIGINT, _sighandler)
+        signal.signal(signal.SIGQUIT, _sighandler)
+        signal.signal(signal.SIGHUP, _sighandler)
+        signal.signal(signal.SIGTERM, _sighandler)
 
         self._run_nested(self.parser.par_multi, freq_var, calculated_params)
 
@@ -751,6 +771,9 @@ class SDE(object):
                     self.dump_state()
                     del self.state_results[-1]
                 want_dump = False
+
+                if want_exit:
+                    sys.exit(0)
 
         if not every:
             self.output_summary()
