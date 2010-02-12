@@ -148,42 +148,39 @@ class TextOutput(object):
             self.out['main'] = sys.stdout
 
     def finish_block(self, sub_name):
-        self._print('', sub_name=sub_name)
+        print >>self.out[sub_name], ''
+        self.out[sub_name].flush()
 
     def data(self, pars, sub_name, float_=True):
         if float_:
             rep = ['%15.8e' % x for x in pars]
         else:
             rep = [str(x) for x in pars]
-        self._print(' '.join(rep), sub_name=sub_name)
-
-    def _print(self, val, nl=True, sub_name='main'):
-        if nl:
-            print >>self.out[sub_name], val
-        else:
-            print >>self.out[sub_name], val,
+        print >>self.out[sub_name], ' '.join(rep)
 
     def header(self):
-        self._print('# %s' % ' '.join(sys.argv))
+        out = self.out['main']
+
+        print >>out, '# %s' % ' '.join(sys.argv)
         if self.sde.options.seed is not None:
-            self._print('# seed = %d' % self.sde.options.seed)
-        self._print('# sim periods = %d' % self.sde.options.simperiods)
-        self._print('# transient periods = %d' % self.sde.options.transients)
-        self._print('# samples = %d' % self.sde.options.samples)
-        self._print('# paths = %d' % self.sde.options.paths)
-        self._print('# spp = %d' % self.sde.options.spp)
+            print >>out, '# seed = %d' % self.sde.options.seed
+        print >>out, '# sim periods = %d' % self.sde.options.simperiods
+        print >>out, '# transient periods = %d' % self.sde.options.transients
+        print >>out, '# samples = %d' % self.sde.options.samples
+        print >>out, '# paths = %d' % self.sde.options.paths
+        print >>out, '# spp = %d' % self.sde.options.spp
         for par in self.sde.parser.par_single:
-            self._print('# %s = %f' % (par, self.sde.options.__dict__[par]))
-        self._print('#', False)
+            print >>out, '# %s = %f' % (par, self.sde.options.__dict__[par])
+        print >>out, '#',
         for par in self.sde.parser.par_multi:
-            self._print(par, False)
+            print >>out, par,
 
         if self.sde.scan_var is not None:
-            self._print('%s' % self.sde.scan_var, False)
+            print >>out, '%s' % self.sde.scan_var,
         for i in range(0, self.sde.num_vars):
-            self._print('x%d' % i, False)
+            print >>out, 'x%d' % i,
 
-        self._print('')
+        print >>out, ''
 
 class LoggerOutput(object):
     def __init__(self, sde, subfiles):
@@ -704,7 +701,7 @@ class SDE(object):
                                 x[i*self.options.paths:(i+1)*self.options.paths],
                                 args)
 
-                out[out_name].extend(func(self, *args))
+                    out[out_name].extend(func(self, *args))
 
             for out_name, v in out.iteritems():
                 if v and type(v[0]) is list:
