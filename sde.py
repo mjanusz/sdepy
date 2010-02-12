@@ -232,6 +232,10 @@ class SDE(object):
             of the system.  Every ``frequency`` * ``samples`` steps, the value
             of this variable will be folded back to the range of [0, period).
             It's full (unfolded) value will however be retained in the output.
+
+            The folded values will result in faster CUDA code if trigonometric
+            functions are used and if the magnitude of their arguments always
+            remains below 48039.0f (see CUDA documentation).
         """
         self.parser = OptionParser()
         self.parser.add_option('--spp', dest='spp', help='steps per period', metavar='DT', type='int', action='store', default=100)
@@ -406,6 +410,9 @@ class SDE(object):
         self.output.header()
 
     def _sim_prep_mod(self, sources, sim_func):
+        # The use of fast math below will result in certain mathematical functions
+        # being automaticallky replaced with their faster counterparts prefixed with
+        # __, e.g. __sinf().
         if type(sources) is str:
             self.mod = pycuda.compiler.SourceModule(sources, options=['--use_fast_math'])
         else:

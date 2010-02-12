@@ -1,0 +1,18 @@
+- initial conditions depending on the scan parameter
+- automatically finish run when the result is not changing?
+- doc: compare efficiency of the different RNGs
+- why adding more precision to the factor results in nans?
+  - add support for RNG testing mode.
+- add support for double calculations
+- the folding of arguments of trigonometric functions should be to -pi, pi to make the intrinsic functions more precise
+- the folding should be possible to do directly in the kernels
+- make it possible to scan over d0 and other parameters (e.g. gamma)
+
+RNG test results:
+
+# time ./bistable.py --force=0.5 --gamma_=0.5 --psd=1.0 --d0=0.025 --spp=1000 --paths=8192 --simperiods=10000 --samples=100000 --rng=kiss32
+
+xs32:   0m11.271s
+nr32: 	0m29.358s
+kiss32: 0m23.508s
+
