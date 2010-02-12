@@ -14,6 +14,13 @@ import pycuda.compiler
 from mako.template import Template
 from mako.lookup import TemplateLookup
 
+# Map RNG name to number of uint state variables.
+RNG_STATE = {
+    'xorshift32': 1,
+    'kiss32': 4,
+    'kiss': 4,
+}
+
 def drift_velocity(sde, *args):
     ret = []
     for starting, final in args:
@@ -50,7 +57,9 @@ def avg_moments(sde, *args):
 
 def _convert_to_double(src):
     import re
-    return re.sub('([0-9]+\.[0-9]*)f', '\\1', src.replace('float', 'double'))
+    s = src.replace('float', 'double')
+    s = s.replace('FLT_EPSILON', 'DBL_EPSILON')
+    return re.sub('([0-9]+\.[0-9]*)f', '\\1', s)
 
 def _parse_range(option, opt_str, value, parser):
     vals = value.split(':')
@@ -108,6 +117,8 @@ class SRK2(SolverGenerator):
         ctx['noises'] = sde.num_noises
         ctx['num_noises'] = num_noises
         ctx['sde_code'] = sde.code
+        ctx['rng_state_size'] = RNG_STATE[sde.options.rng]
+        ctx['rng'] = sde.options.rng
 
         lookup = TemplateLookup(directories=sys.path,
                 module_directory='/tmp/pysde_modules-%s' %
@@ -200,6 +211,8 @@ class HDF5Output(object):
 class SDE(object):
     """A class representing a SDE equation to solve."""
 
+    format_cmd = r"indent -linux -sob -l120 {file} ; sed -i -e '/^$/{{N; s/\n\([\t ]*}}\)$/\1/}}' -e '/{{$/{{N; s/{{\n$/{{/}}' {file}"
+
     def __init__(self, code, params, global_vars, num_vars, num_noises,
             noise_map, periodic_map=None):
         """
@@ -233,6 +246,8 @@ class SDE(object):
         self.parser.add_option('--save_src', dest='save_src', help='save the generated source to FILE', metavar='FILE',
                                type='string', action='store', default=None)
         self.parser.add_option('--precision', dest='precision', help='precision of the floating-point numbers (single, double)', type='choice', choices=['single', 'double'], default='single')
+        self.parser.add_option('--rng', dest='rng', help='PRNG to use', type='choice', choices=RNG_STATE.keys(), default='kiss32')
+        self.parser.add_option('--noformat_src', dest='format_src', help='do not format the generated source code', action='store_false', default=True)
 
         # List of single-valued system parameters
         self.parser.par_multi = []
@@ -352,6 +367,9 @@ class SDE(object):
             with open(self.options.save_src, 'w') as file:
                 print >>file, kernel_source
 
+            if self.options.format_src:
+                os.system(self.format_cmd.format(file=self.options.save_src))
+
         return self.cuda_prep(init_vectors, kernel_source, scan_var, scan_var_range)
 
     def cuda_prep(self, init_vectors, sources, scan_var,
@@ -416,7 +434,7 @@ class SDE(object):
             self._gpu_vec.append(cuda.mem_alloc(vt.nbytes))
 
         # Initialize the RNG seeds.
-        self._rng_state = numpy.random.randint(0, sys.maxint, self.num_threads)
+        self._rng_state = numpy.random.randint(0, 2**32-1, self.num_threads * RNG_STATE[self.options.rng])
         self._rng_state = self._rng_state.astype(numpy.uint32)
         self._gpu_rng_state = cuda.mem_alloc(self._rng_state.nbytes)
         cuda.memcpy_htod(self._gpu_rng_state, self._rng_state)

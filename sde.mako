@@ -1,4 +1,4 @@
-<%include file="rng.cu"/>
+<%include file="rng.mako"/>
 
 // Constants
 %for param in const_parameters:
@@ -7,6 +7,17 @@
 
 __constant__ float dt = 0.0f;
 __constant__ int samples = 0;
+
+<%def name="rng_uni()">
+	rng_${rng}(
+	%for i in range(0, rng_state_size):
+		%if i > 0:
+			,
+		%endif
+		lrng_state + ${i}
+	%endfor
+	)
+</%def>
 
 // System of differential equations to solve.
 __device__ inline void RHS(
@@ -22,49 +33,12 @@ __device__ inline void RHS(
 	${sde_code}
 }
 
-__global__ void AdvanceSim(unsigned int *rng_state,
-	## Kernel arguments.
-	%for i in range(0, rhs_vars):
-		float *cx${i},
-	%endfor
-	%for param in par_cuda:
-		float *c${param},
-	%endfor
-	float ct)
-{
-	int idx = blockIdx.x * blockDim.x + threadIdx.x;
-	int i;
-## Local variables
-	float
-	%for i in range(0, rhs_vars):
-		x${i}, xt${i}, xtt${i}, xim${i},
-	%endfor
-	%for param in par_cuda:
-		${param},
-	%endfor
-	%for i in range(0, num_noises):
-		n${i},
-	%endfor
-	t;
-
-	unsigned int lrng_state;
-
-	## Cache to local variables.
-	%for i in range(0, rhs_vars):
-		x${i} = cx${i}[idx];
-	%endfor
-	%for param in par_cuda:
-		${param} = c${param}[idx];
-	%endfor
-
-	t = ct;
-	lrng_state = rng_state[idx];
-
+<%def name="SRK2()">
 	for (i = 1; i <= samples; i++) {
 		## RNG call.
 		%for i in range(0, num_noises/2):
-			n${2*i} = rng_uni(&lrng_state);
-			n${2*i+1} = rng_uni(&lrng_state);
+			n${2*i} = ${rng_uni()};
+			n${2*i+1} = ${rng_uni()};
 			bm_trans(n${2*i}, n${2*i+1});
 		%endfor
 
@@ -106,8 +80,8 @@ __global__ void AdvanceSim(unsigned int *rng_state,
 
 		## RNG call.
 		%for i in range(0, noises/2):
-			n${2*i} = rng_uni(&lrng_state);
-			n${2*i+1} = rng_uni(&lrng_state);
+			n${2*i} = ${rng_uni()};
+			n${2*i+1} = ${rng_uni()};
 			bm_trans(n${2*i}, n${2*i+1});
 		%endfor
 
@@ -129,10 +103,62 @@ __global__ void AdvanceSim(unsigned int *rng_state,
 		%endfor
 		t = ct + i*dt;
 	}
+</%def>
+
+<%def name="rng_test()">
+	x0 = ${rng_uni()};
+</%def>
+
+__global__ void AdvanceSim(unsigned int *rng_state,
+	## Kernel arguments.
+	%for i in range(0, rhs_vars):
+		float *cx${i},
+	%endfor
+	%for param in par_cuda:
+		float *c${param},
+	%endfor
+	float ct)
+{
+	int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	int i;
+## Local variables
+	float
+	%for i in range(0, rhs_vars):
+		x${i}, xt${i}, xtt${i}, xim${i},
+	%endfor
+	%for param in par_cuda:
+		${param},
+	%endfor
+	%for i in range(0, num_noises):
+		n${i},
+	%endfor
+	t;
+
+	unsigned int lrng_state[${rng_state_size}];
+
+	## Cache to local variables.
+	%for i in range(0, rhs_vars):
+		x${i} = cx${i}[idx];
+	%endfor
+	%for param in par_cuda:
+		${param} = c${param}[idx];
+	%endfor
+
+	t = ct;
+
+	%for i in range (0, rng_state_size):
+		lrng_state[${i}] = rng_state[${rng_state_size} * idx + ${i}];
+	%endfor
+
+	${SRK2()}
+##	${rng_test()}
 
 	%for i in range(0, rhs_vars):
 		cx${i}[idx] = x${i};
 	%endfor
-	rng_state[idx] = lrng_state;
+
+	%for i in range (0, rng_state_size):
+		rng_state[${rng_state_size} * idx + ${i}] = lrng_state[${i}];
+	%endfor
 }
 
