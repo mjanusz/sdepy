@@ -613,9 +613,10 @@ class SDE(object):
             args = kernel_args + [numpy.float32(self.sim_t)]
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
 
-            if every:
+            if every and self.scan_var is not None:
                 fold_variables(j, True)
                 self.output_current()
+                self.output.finish_block()
             elif transient and self.sim_t >= self.options.transients * period:
                 for i in range(0, self.num_vars):
                     cuda.memcpy_dtoh(self.vec_start[i], self._gpu_vec[i])
