@@ -130,25 +130,38 @@ class SRK2(SolverGenerator):
 
 
 class TextOutput(object):
-    def __init__(self, sde):
+    def __init__(self, sde, subfiles):
         self.sde = sde
+        self.out = {}
+
         if sde.options.output is not None:
-            self.out = open(sde.options.output, 'w')
+            self.out['main'] = open(sde.options.output, 'w')
+
+            for sub in subfiles:
+                if sub == 'main':
+                    continue
+                self.out[sub] = open('%s_%s' % (sde.options.output, sub), 'w')
         else:
-            self.out = sys.stdout
+            if len(subfiles) > 1:
+                raise ValueError('Output file name required so that auxiliary data stream can be saved.')
 
-    def finish_block(self):
-        print
+            self.out['main'] = sys.stdout
 
-    def data(self, pars):
-        rep = ['%15.8e' % x for x in pars]
-        self._print(' '.join(rep))
+    def finish_block(self, sub_name):
+        self._print('', sub_name=sub_name)
 
-    def _print(self, val, nl=True):
+    def data(self, pars, sub_name, float_=True):
+        if float_:
+            rep = ['%15.8e' % x for x in pars]
+        else:
+            rep = [str(x) for x in pars]
+        self._print(' '.join(rep), sub_name=sub_name)
+
+    def _print(self, val, nl=True, sub_name='main'):
         if nl:
-            print >>self.out, val
+            print >>self.out[sub_name], val
         else:
-            print >>self.out, val,
+            print >>self.out[sub_name], val,
 
     def header(self):
         self._print('# %s' % ' '.join(sys.argv))
@@ -173,7 +186,7 @@ class TextOutput(object):
         self._print('')
 
 class LoggerOutput(object):
-    def __init__(self, sde):
+    def __init__(self, sde, subfiles):
         self.sde = sde
         self.log = []
 
@@ -186,8 +199,9 @@ class LoggerOutput(object):
     def header(self):
         pass
 
+# TODO: Add support for subfiles.
 class HDF5Output(object):
-    def __init__(self, sde):
+    def __init__(self, sde, subfiles):
         self.sde = sde
         import tables
 
@@ -331,13 +345,6 @@ class SDE(object):
         else:
             self.float = numpy.float64
 
-        if self.options.oformat == 'text':
-            self.output = TextOutput(self)
-        elif self.options.oformat ==  'logger':
-            self.output = LoggerOutput(self)
-        else:
-            self.output = HDF5Output(self)
-
         return opt_ok
 
     # TODO: add support for scanning over a set of parameters
@@ -435,8 +442,6 @@ class SDE(object):
         self._sim_prep_mod(sources, sim_func)
         self._sim_prep_const()
         self._sim_prep_var()
-
-        self.output.header()
 
     def _sim_prep_mod(self, sources, sim_func):
         # The use of fast math below will result in certain mathematical functions
@@ -539,10 +544,20 @@ class SDE(object):
         """
         self.req_output = req_output[self.options.omode]
 
+        if self.options.oformat == 'text':
+            self.output = TextOutput(self, self.req_output.keys())
+        elif self.options.oformat ==  'logger':
+            self.output = LoggerOutput(self, self.req_output.keys())
+        else:
+            self.output = HDF5Output(self, self.req_output.keys())
+
+        self.output.header()
+
         # Determine which variables are necessary for the output.
         self.req_vars = set([])
-        for i, v in self.req_output:
-            self.req_vars |= set(v)
+        for k, v in self.req_output.iteritems():
+            for func, vars in v:
+                self.req_vars |= set(vars)
 
         self.block_size = block_size
         arg_types = ['P'] + ['P']*self.num_vars
@@ -630,7 +645,7 @@ class SDE(object):
                 fold_variables(j, True)
                 self.output_current()
                 if self.scan_var is not None:
-                    self.output.finish_block()
+                    self.output.finish_block('main')
             elif transient and self.sim_t >= self.options.transients * period:
                 for i in range(0, self.num_vars):
                     cuda.memcpy_dtoh(self.vec_start[i], self._gpu_vec[i])
@@ -644,7 +659,7 @@ class SDE(object):
         if not every:
             self.output_summary()
 
-        self.output.finish_block()
+        self.output.finish_block('main')
 
     def output_current(self):
         vars = {}
@@ -666,27 +681,41 @@ class SDE(object):
 
     def _output_results(self, vars, *misc_pars):
         for i in range(0, self.scan_var_size):
-            out = []
+            out = {}
+            for out_name, v in self.req_output.iteritems():
+                out[out_name] = []
 
             for par in self.parser.par_multi:
-                out.append(self._sim_sym[par])
-            out.extend(misc_pars)
+                out['main'].append(self._sim_sym[par])
+            out['main'].extend(misc_pars)
 
             if self.scan_var is not None:
-                out.append(self._sv[i*self.options.paths])
+                out['main'].append(self._sv[i*self.options.paths])
 
-            for func, req_vars in self.req_output:
-                args = map(lambda x: vars[x], req_vars)
-                if args and type(args[0]) is tuple:
-                    args = map(lambda x:
-                        (x[0][i*self.options.paths:(i+1)*self.options.paths],
-                         x[1][i*self.options.paths:(i+1)*self.options.paths]), args)
+            for out_name, v in self.req_output.iteritems():
+                for func, req_vars in v:
+                    args = map(lambda x: vars[x], req_vars)
+                    if args and type(args[0]) is tuple:
+                        args = map(lambda x:
+                            (x[0][i*self.options.paths:(i+1)*self.options.paths],
+                             x[1][i*self.options.paths:(i+1)*self.options.paths]), args)
+                    else:
+                        args = map(lambda x:
+                                x[i*self.options.paths:(i+1)*self.options.paths],
+                                args)
+
+                out[out_name].extend(func(self, *args))
+
+            for out_name, v in out.iteritems():
+                if v and type(v[0]) is list:
+                    for vv in v:
+                        a = type(vv[0])
+                        if a is numpy.float64 or a is numpy.float32:
+                            self.output.data(vv, out_name, float_=True)
+                        else:
+                            self.output.data(vv, out_name, float_=False)
+                    self.output.finish_block(out_name)
                 else:
-                    args = map(lambda x:
-                            x[i*self.options.paths:(i+1)*self.options.paths],
-                            args)
+                    self.output.data(v, out_name)
 
-                out.extend(func(self, *args))
-
-            self.output.data(out)
 
