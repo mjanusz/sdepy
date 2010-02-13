@@ -7,9 +7,10 @@ import sys
 
 def init_vector(sdei, i):
     if i == 0:
-        # Positions.
-        return numpy.zeros(sdei.num_threads)
-#        return numpy.random.uniform(0, 2.0*math.pi, sdei.num_threads)
+#        # Positions.
+        a = numpy.zeros(sdei.num_threads)
+        a[:] = numpy.arcsin(sdei.get_param('force') / sdei.get_param('psd'))
+        return a
     else:
         # Velocities.
         a = numpy.zeros(sdei.num_threads)

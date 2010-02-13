@@ -1,4 +1,3 @@
-- initial conditions depending on the scan parameter
 - automatically finish run when the result is not changing?
 - doc: compare efficiency of the different RNGs
 - why adding more precision to the factor results in nans?
