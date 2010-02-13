@@ -132,6 +132,8 @@ class TextOutput(object):
             print '# seed = %d' % self.sde.options.seed
         print '# sim periods = %d' % self.sde.options.simperiods
         print '# transient periods = %d' % self.sde.options.transients
+        print '# samples = %d' % self.sde.options.samples
+        print '# paths = %d' % self.sde.options.paths
         print '# spp = %d' % self.sde.options.spp
         for par in self.sde.parser.par_single:
             print '# %s = %f' % (par, self.sde.options.__dict__[par])
@@ -409,7 +411,7 @@ class SDE(object):
 
         # Prepare device vectors.
         for i in range(0, self.num_vars):
-            vt = self.init_vectors(self, i).astype(self.float)
+            vt = numpy.zeros(self.num_threads).astype(self.float)
             self.vec.append(vt)
             self._gpu_vec.append(cuda.mem_alloc(vt.nbytes))
 
@@ -440,7 +442,13 @@ class SDE(object):
         cuda.memcpy_htod(self._gpu_sym[name], val)
 
     def get_param(self, name):
-        return self._sim_sym[name]
+        try:
+            return self._sim_sym[name]
+        except KeyError:
+            if name in self.scan_var:
+                return self._sv
+            else:
+                return getattr(self.options, name)
 
     def get_var(self, i, starting=False):
         if starting:
@@ -529,7 +537,7 @@ class SDE(object):
         # Prepare an array for number of periods for periodic variables.
         self.vec_nx = {}
         for i, v in self.periodic_map.iteritems():
-            self.vec_nx[i] = numpy.zeros_like(self.vec[i])
+            self.vec_nx[i] = numpy.zeros_like(self.vec[i]).astype(numpy.int64)
 
         # Prepare an array for initial value of the variables (after
         # transients).
@@ -550,12 +558,12 @@ class SDE(object):
                         cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
 
                     self.vec_nx[i] = numpy.add(self.vec_nx[i],
-                            numpy.floor_divide(self.vec[i], period))
+                            numpy.floor_divide(self.vec[i], period).astype(numpy.int64))
                     self.vec[i] = numpy.remainder(self.vec[i], period)
                     cuda.memcpy_htod(self._gpu_vec[i], self.vec[i])
 
         # Actually run the simulation here.
-        for j in range(0, int(self.options.simperiods * self.options.spp / self.options.samples)+1):
+        for j in xrange(0, int(self.options.simperiods * self.options.spp / self.options.samples)+1):
             self.sim_t = self.options.samples * j * self.dt
             args = kernel_args + [numpy.float32(self.sim_t)]
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
