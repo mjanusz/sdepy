@@ -1,6 +1,8 @@
 #ifndef __CU_RNG_H
 #define __CU_RNG_H
 
+#include <float.h>
+
 #define PI 3.14159265358979f
 
 /*
@@ -35,7 +37,7 @@ __device__ float rng_kiss32(unsigned int *x, unsigned int *y,
 	*y ^= (*y >> 13);
 	*y ^= (*y << 5);
 
-	return ((((*z << 16) + *w) ^ *x) + *y) * 2.328306e-10;	// (MWC ^ CONG) + SHR3
+	return ((((*z << 16) + *w) ^ *x) + *y) * 2.328306e-10f;	// (MWC ^ CONG) + SHR3
 }
 %endif
 
@@ -63,7 +65,7 @@ __device__ float rng_kiss(unsigned int *x, unsigned int *y,
  */
 __device__ void bm_trans(float& u1, float& u2)
 {
-	float r = sqrtf(-2.0f * logf(u1));
+	float r = sqrtf(-2.0f * logf(u1 + FLT_EPSILON));
 	float phi = 2.0f * PI * u2;
 	u1 = r * cosf(phi);
 	u2 = r * sinf(phi);
