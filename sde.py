@@ -918,7 +918,7 @@ class SDE(object):
         # If this is a continuation of a previous simulation, make output-related
         # parameters overridable.
         if new_options.continue_:
-            overridable.extend(['output', 'output_format', 'output_mode', 'simperiods'])
+            overridable.extend(['output', 'oformat', 'omode', 'simperiods'])
             # TODO: This could potentially cause problems with transients if the original
             # simulation was run in summary mode and the new one is in path mode.
 
