@@ -522,8 +522,9 @@ class SDE(object):
 
     def _init_rng(self):
         # Initialize the RNG seeds.
-        self._rng_state = numpy.random.randint(0, 2**32-1, self.num_threads * RNG_STATE[self.options.rng])
-        self._rng_state = self._rng_state.astype(numpy.uint32)
+        self._rng_state = numpy.fromstring(numpy.random.bytes(
+            self.num_threads * RNG_STATE[self.options.rng] * numpy.uint32().nbytes),
+            dtype=numpy.uint32)
         self._gpu_rng_state = cuda.mem_alloc(self._rng_state.nbytes)
         cuda.memcpy_htod(self._gpu_rng_state, self._rng_state)
 
