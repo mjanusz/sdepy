@@ -38,8 +38,8 @@ def myhist(sdei, x):
 
     bin_size = 0.02
 
-    min_ = avg-3*dev
-    max_ = avg+3*dev
+    min_ = numpy.min(x)
+    max_ = numpy.max(x)
 
     bins = numpy.arange(math.floor(min_ / bin_size) * bin_size, max_, bin_size)
 
