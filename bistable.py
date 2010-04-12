@@ -10,7 +10,9 @@ def init_vector(sdei, i):
     if i == 0:
         # Positions.
         a = numpy.zeros(sdei.num_threads)
-        a[:] = numpy.arcsin(sdei.get_param('force') / sdei.get_param('psd'))
+        force = sdei.get_param('force').copy()
+        force[(force > 1.0)] = 1.0
+        a[:] = numpy.arcsin(force / sdei.get_param('psd'))
         return a
     else:
         # Velocities.
