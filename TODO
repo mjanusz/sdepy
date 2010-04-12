@@ -1,13 +1,13 @@
-- add the option to save state and restore a simulation from it.
 - make it possible to run more than 64k * 64 threads at the same time
 - make it possible to scan over d0 and other parameters (e.g. gamma)
 - automatically finish run when the result is not changing?
 - doc: compare efficiency of the different RNGs
 - why adding more precision to the factor results in nans?
   - add support for RNG testing mode.
-- add support for double calculations
+- add support for double precision calculations
 - the folding of arguments of trigonometric functions should be to -pi, pi to make the intrinsic functions more precise
 - the folding should be possible to do directly in the kernels
+- optimize state dumping for large scans.
 
 RNG test results:
 
