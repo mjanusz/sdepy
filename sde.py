@@ -13,6 +13,7 @@ import numpy
 import pycuda.autoinit
 import pycuda.driver as cuda
 import pycuda.compiler
+import pycuda.tools
 
 from mako.template import Template
 from mako.lookup import TemplateLookup
@@ -331,7 +332,10 @@ class SDE(object):
             self.periodic_map = periodic_map
         self.code = code
 
+        # Current results.
         self.state_results = []
+        # Results loaded from a dump file.
+        self.prev_state_results = []
 
         self._sim_sym = {}
         self._gpu_sym = {}
@@ -624,6 +628,14 @@ class SDE(object):
 
         arg_types += [self.float]
         self.advance_sim.prepare(arg_types, block=(block_size, 1, 1))
+
+        kern = self.advance_sim
+        ddata = pycuda.tools.DeviceData()
+        occ = pycuda.tools.OccupancyRecord(ddata, block_size, kern.shared_size_bytes, kern.num_regs)
+
+        print 'CUDA stats l:%d  s:%d  r:%d  occ:(%f tb:%d w:%d l:%s)' % (kern.local_size_bytes, kern.shared_size_bytes,
+                    kern.num_regs, occ.occupancy, occ.tb_per_mp, occ.warps_per_mp, occ.limited_by)
+
         self._scan_iter = 0
 
         signal.signal(signal.SIGUSR1, _sighandler)
@@ -654,13 +666,13 @@ class SDE(object):
             cuda.memcpy_htod(self._gpu_sym['dt'], self.dt)
 
             # In the resume mode, we skip all the computations that have already
-            # been completed and thus are saved in self.state_results.
+            # been completed and thus are saved in self.prev_state_results.
             if not self.options.resume:
                 self._run_kernel(calculated_params, period)
-            elif (self._scan_iter == len(self.state_results)-1 and
-                    self.state_results[-1][0] < self.iter_to_sim_time(self.max_sim_iter)):
+            elif (self._scan_iter == len(self.prev_state_results)-1 and
+                    self.prev_state_results[-1][0] < self.iter_to_sim_time(self.max_sim_iter)):
                 self._run_kernel(calculated_params, period)
-            elif self._scan_iter > len(self.state_results)-1:
+            elif self._scan_iter > len(self.prev_state_results)-1:
                 self._run_kernel(calculated_params, period)
 
             self._scan_iter += 1
@@ -691,20 +703,20 @@ class SDE(object):
             every = False
 
         if (self.options.continue_ or
-                (self.options.resume and self._scan_iter < len(self.state_results))):
-            self.vec = self.state_results[self._scan_iter][1]
-            self.vec_nx = self.state_results[self._scan_iter][2]
-            self._rng_state = self.state_results[self._scan_iter][3]
+                (self.options.resume and self._scan_iter < len(self.prev_state_results))):
+            self.vec = self.prev_state_results[self._scan_iter][1]
+            self.vec_nx = self.prev_state_results[self._scan_iter][2]
+            self._rng_state = self.prev_state_results[self._scan_iter][3]
             cuda.memcpy_htod(self._gpu_rng_state, self._rng_state)
             for i in range(0, self.num_vars):
                 cuda.memcpy_htod(self._gpu_vec[i], self.vec[i])
 
-            self.sim_t = self.state_results[self._scan_iter][0]
+            self.sim_t = self.prev_state_results[self._scan_iter][0]
 
             if self.options.omode == 'summary':
-                self.start_t = self.state_results[self._scan_iter][4]
-                self.vec_start = self.state_results[self._scan_iter][5]
-                self.vec_start_nx = self.state_results[self._scan_iter][6]
+                self.start_t = self.prev_state_results[self._scan_iter][4]
+                self.vec_start = self.prev_state_results[self._scan_iter][5]
+                self.vec_start_nx = self.prev_state_results[self._scan_iter][6]
 
                 if self.sim_t >= self.options.transients * period:
                     transient = False
@@ -763,8 +775,7 @@ class SDE(object):
                 transient = False
                 self.start_t = self.sim_t
                 self.vec_start_nx = self.vec_nx.copy()
-
-            fold_variables(j, True)
+                fold_variables(j, True)
 
             if want_dump:
                 if self.options.dump_filename is not None:
@@ -906,7 +917,7 @@ class SDE(object):
 
         self.parser.par_single = state['par_single']
         self.parser.par_multi = state['par_multi']
-        self.state_results = state['results']
+        self.prev_state_results = state['results']
 
         numpy.random.set_state(state['numpy.random'])
 
@@ -914,7 +925,7 @@ class SDE(object):
             self._sv = state['sv']
 
         # Options overridable from the command line.
-        overridable = ['resume', 'continue_', 'dump_state']
+        overridable = ['resume', 'continue_', 'dump_filename']
 
         # If this is a continuation of a previous simulation, make output-related
         # parameters overridable.
@@ -922,6 +933,8 @@ class SDE(object):
             overridable.extend(['output', 'oformat', 'omode', 'simperiods'])
             # TODO: This could potentially cause problems with transients if the original
             # simulation was run in summary mode and the new one is in path mode.
+        else:
+            self.state_results = self.prev_state_results
 
         for option in overridable:
             if hasattr(new_options, option) and getattr(new_options, option) is not None:
