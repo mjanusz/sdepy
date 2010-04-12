@@ -638,11 +638,12 @@ class SDE(object):
 
         self._scan_iter = 0
 
-        signal.signal(signal.SIGUSR1, _sighandler)
-        signal.signal(signal.SIGINT, _sighandler)
-        signal.signal(signal.SIGQUIT, _sighandler)
-        signal.signal(signal.SIGHUP, _sighandler)
-        signal.signal(signal.SIGTERM, _sighandler)
+        if self.options.dump_filename is not None:
+            signal.signal(signal.SIGUSR1, _sighandler)
+            signal.signal(signal.SIGINT, _sighandler)
+            signal.signal(signal.SIGQUIT, _sighandler)
+            signal.signal(signal.SIGHUP, _sighandler)
+            signal.signal(signal.SIGTERM, _sighandler)
 
         self._run_nested(self.parser.par_multi, freq_var, calculated_params)
 
@@ -870,6 +871,10 @@ class SDE(object):
 
     def save_block(self):
         """Save the current block into the state of the solver if necessary."""
+
+        # If no dump file is specified, do not store any data in state_results.
+        if self.options.dump_filename is None:
+            return
 
         cuda.memcpy_dtoh(self._rng_state, self._gpu_rng_state)
         for i in range(0, self.num_vars):
