@@ -35,12 +35,17 @@ parser.add_option('--output', dest='output',
 options, args = parser.parse_args()
 
 gamma = args[0]     # gamma value
-postfix = ''
+files = []
+postfixes = []
 
 if len(args) > 1:
-    postfix = args[1]
+    for i in range(1, len(args)):
+        postfixes.append(args[i])
+else:
+    postfixes.append('')
 
-files = glob.glob('g%s_d[0-9].???%s' % (gamma, postfix))
+for postfix in postfixes:
+    files.extend(glob.glob('g%s_d[0-9].???%s' % (gamma, postfix)))
 
 def find_bs(data):
     return np.sum(data[:][:,0] == data[-1:][:,0])
