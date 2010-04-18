@@ -9,12 +9,10 @@ def init_vector(sdei, i):
     if i == 0:
         # Positions.
         #       return numpy.random.uniform(0, 2.0*math.pi, sdei.num_threads)
-        a = numpy.zeros(sdei.num_threads)
-        a[:] = 0.5
-        return a
+        return numpy.random.uniform(0.0, 1.0, sdei.num_threads)
     else:
         # Velocities.
-        return numpy.zeros(sdei.num_threads)
+        return numpy.random.uniform(-2.0, 2.0, sdei.num_threads)
 
 def calculated_params(sdei):
     gam = sdei.get_param('gam')
