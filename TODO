@@ -1,5 +1,4 @@
 - make it possible to run more than 64k * 64 threads at the same time
-- make it possible to scan over d0 and other parameters (e.g. gamma)
 - automatically finish run when the result is not changing?
 - doc: compare efficiency of the different RNGs
 - why adding more precision to the factor results in nans?
@@ -9,6 +8,10 @@
 - the folding should be possible to do directly in the kernels
 - optimize state dumping for large scans.
 
+# TODO
+
+- prev_state_results as a named tuple
+  
 RNG test results:
 
 # time ./bistable.py --force=0.5 --gamma_=0.5 --psd=1.0 --d0=0.025 --spp=1000 --paths=8192 --simperiods=10000 --samples=100000 --rng=kiss32
@@ -16,4 +19,9 @@ RNG test results:
 xs32:   0m11.271s
 nr32: 	0m29.358s
 kiss32: 0m23.508s
+
+
+# time ./bistable.py --force=0.5:0.7:50 --gamma_=0.3 --psd=1.0 --spp=200 --rng=nr32 --paths=16384 --simperiods=1000 --samples=20000 --output=/tmp/g0.3_d${NOISE}_kiss32 --output_mode=path --d0=${NOISE} 
+kiss32: real	0m45.177s
+nr32: real	0m56.128s
 

@@ -4,6 +4,7 @@ import math
 import numpy
 import scipy
 import sde
+import sympy
 import sys
 
 def init_vector(sdei, i):
@@ -19,10 +20,6 @@ def init_vector(sdei, i):
         a = numpy.zeros(sdei.num_threads)
         return a
 
-def calculated_params(sdei):
-    gam = sdei.get_param('gamma_')
-    sdei.set_param('ns', numpy.float32(math.sqrt(sdei.options.d0 * sdei.dt * 2.0 * gam)))
-
 def max_min(sdei, x):
     return [numpy.min(x), numpy.max(x), numpy.average(x)]
 
@@ -33,30 +30,14 @@ def diffusion_coefficient(sdei, x):
     return [deff1 / (2.0 * sdei.sim_t)]
 
 def myhist(sdei, x):
-    dev = numpy.std(x)
-    avg = numpy.average(x)
+    return x
 
-    bin_size = 0.02
+params = {'force': 'DC bias current',
+          'gamma_': 'damping constant',
+          'psd': 'potential strenght',
+          'd0': 'noise strength'}
 
-    min_ = numpy.min(x)
-    max_ = numpy.max(x)
-
-    bins = numpy.arange(math.floor(min_ / bin_size) * bin_size, max_, bin_size)
-
-    hst, edges = numpy.histogram(x, bins=bins, normed=False)
-    ret = [[bins[0], bins[-1]]]
-    for i in hst:
-        ret.append([i])
-
-    return ret
-
-
-params = [('force', 'DC bias current'),
-          ('gamma_', 'damping constant'),
-          ('psd', 'potential strenght'),
-          ('d0', 'noise strength')]
-
-global_vars = ['ns']
+local_vars = { 'ns': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * 2.0 * sdei.S.gamma_) }
 
 code = """
     dx0 = x1;
@@ -64,22 +45,22 @@ code = """
 """
 
 noise_map = {1: ['ns']}
-period_map = {0: (2.0 * numpy.pi, 1)}
+period_map = {0: sde.PeriodInfo(period=2.0 * numpy.pi, freq=1)}
 
-sde_ = sde.SDE(code, params, global_vars, 2, 1, noise_map, period_map)
-if not sde_.parse_args():
-    sys.exit(1)
+sde_ = sde.SDE(code, params, num_vars=2, num_noises=1, noise_map=noise_map, period_map=period_map,
+        local_vars=local_vars)
 
 output = {
         'summary': {
-            'main': [(sde.diffusion_coefficient, [0])],
+            'main': [sde.OutputDecl(func=sde.diffusion_coefficient, vars=[0])],
         },
         'path': {
-            'main': [(diffusion_coefficient, [0]), (max_min, [0])],
-            'vhist': [(myhist, [1])],
+            'main': [sde.OutputDecl(func=diffusion_coefficient, vars=[0]),
+                     sde.OutputDecl(func=max_min, vars=[0])],
+            'vhist': [sde.OutputDecl(func=myhist, vars=[1])],
         }
     }
 
 sde_.prepare(sde.SRK2, init_vector)
-sde_.simulate(output, calculated_params)
+sde_.simulate(output)
 

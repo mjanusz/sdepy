@@ -146,8 +146,13 @@ __global__ void AdvanceSim(unsigned int *rng_state,
 
 	t = ct;
 
-	%for i in range (0, rng_state_size):
+	%for i in range(0, rng_state_size):
 		lrng_state[${i}] = rng_state[${rng_state_size} * idx + ${i}];
+	%endfor
+
+	// Additional local variables that depend on changing parameters.
+	%for name, value in local_vars.iteritems():
+		float ${name} = ${value};
 	%endfor
 
 	${SRK2()}

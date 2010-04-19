@@ -5,10 +5,14 @@ import os
 import pwd
 import signal
 import sys
+import time
+from collections import namedtuple
 
 from optparse import OptionGroup, OptionParser, OptionValueError, Values
 
 import numpy
+import sympy
+from sympy import Symbol
 
 import pycuda.autoinit
 import pycuda.driver as cuda
@@ -17,6 +21,9 @@ import pycuda.tools
 
 from mako.template import Template
 from mako.lookup import TemplateLookup
+
+PeriodInfo = namedtuple('PeriodInfo', 'period freq')
+OutputDecl = namedtuple('OutputDecl', 'func vars')
 
 # Map RNG name to number of uint state variables.
 RNG_STATE = {
@@ -59,15 +66,20 @@ def avg_moments(sde, *args):
 
     return ret
 
+want_save = False
 want_dump = False
 want_exit = False
 
 def _sighandler(signum, frame):
-    global want_dump, want_exit
-    want_dump = True
+    global want_dump, want_exit, want_save
 
-    if signum in [signal.SIGINT, signal.SIGQUIT, signal.SIGTERM]:
-        want_exit = True
+    if signum == signal.SIGUSR2:
+        want_save = True
+    else:
+        want_dump = True
+
+        if signum in [signal.SIGINT, signal.SIGQUIT, signal.SIGTERM]:
+            want_exit = True
 
 def _convert_to_double(src):
     import re
@@ -82,13 +94,19 @@ def _parse_range(option, opt_str, value, parser):
     # will be automatically degraded to float32 later on.
     if len(vals) == 1:
         setattr(parser.values, option.dest, numpy.float64(value))
-        parser.par_single.append(option.dest)
+        parser.par_single.add(option.dest)
     elif len(vals) == 3:
         start = float(vals[0])
         stop = float(vals[1])
-        step = (stop-start) / (int(vals[2])-1)
-        setattr(parser.values, option.dest, numpy.arange(start, stop+0.999*step, step, numpy.float64))
-        parser.par_multi.append(option.dest)
+        size = float(vals[2])
+        setattr(parser.values, option.dest, numpy.linspace(start, stop, size, numpy.float64))
+        parser.par_multi.add(option.dest)
+    elif len(vals) == 4 and vals[0] == 'log':
+        start = float(vals[1])
+        stop = float(vals[2])
+        size = float(vals[3])
+        setattr(parser.values, option.dest, numpy.logspace(start, stop, size, numpy.float64))
+        parser.par_multi.add(option.dest)
     else:
         raise OptionValueError('"%s" has to be a single value or a range of the form \'start:stop:steps\'' % opt_str)
 
@@ -104,10 +122,10 @@ def _get_module_source(*files):
 
 class SolverGenerator(object):
     @classmethod
-    def get_source(cls, sde, parameters, kernel_parameters):
+    def get_source(cls, sde, const_parameters, kernel_parameters, local_vars):
         """
         sde: a SDE object for which the code is to be generated
-        parameters: list of parameters for the SDE
+        const_parameters: list of constant parameters for the SDE
         kernel_parameters: list of parameters which will be passed as arguments to
             the kernel
         """
@@ -117,16 +135,12 @@ class SRK2(SolverGenerator):
     """Stochastic Runge Kutta method of the 2nd order."""
 
     @classmethod
-    def get_source(cls, sde, parameters, kernel_parameters):
-        noise_strengths = set()
-        for i in sde.noise_map.itervalues():
-            noise_strengths.update(set(i))
-        noise_strengths.difference_update(set([0]))
-
+    def get_source(cls, sde, const_parameters, kernel_parameters, local_vars):
         num_noises = sde.num_noises + sde.num_noises % 2
 
         ctx = {}
-        ctx['const_parameters'] = parameters - set(kernel_parameters) | set(noise_strengths)
+        ctx['const_parameters'] = const_parameters
+        ctx['local_vars'] = local_vars
         ctx['par_cuda'] = kernel_parameters
         ctx['rhs_vars'] = sde.num_vars
         ctx['noise_strength_map'] = sde.noise_map
@@ -142,134 +156,93 @@ class SRK2(SolverGenerator):
         sde_template = lookup.get_template('sde.mako')
         return sde_template.render(**ctx)
 
-
 class TextOutput(object):
     def __init__(self, sde, subfiles):
         self.sde = sde
-        self.out = {}
-
-        if sde.options.output is not None:
-            self.out['main'] = open(sde.options.output, 'w')
-
-            for sub in subfiles:
-                if sub == 'main':
-                    continue
-                self.out[sub] = open('%s_%s' % (sde.options.output, sub), 'w')
-        else:
-            if len(subfiles) > 1:
-                raise ValueError('Output file name required so that auxiliary data stream can be saved.')
-
-            self.out['main'] = sys.stdout
-
-    def finish_block(self, sub_name):
-        print >>self.out[sub_name], ''
-        self.out[sub_name].flush()
-
-    def data(self, pars, sub_name, float_=True):
-        if float_:
-            rep = ['%15.8e' % x for x in pars]
-        else:
-            rep = [str(x) for x in pars]
-        print >>self.out[sub_name], ' '.join(rep)
-
-    def header(self):
-        out = self.out['main']
-
-        print >>out, '# %s' % ' '.join(sys.argv)
-        if self.sde.options.seed is not None:
-            print >>out, '# seed = %d' % self.sde.options.seed
-        print >>out, '# sim periods = %d' % self.sde.options.simperiods
-        print >>out, '# transient periods = %d' % self.sde.options.transients
-        print >>out, '# samples = %d' % self.sde.options.samples
-        print >>out, '# paths = %d' % self.sde.options.paths
-        print >>out, '# spp = %d' % self.sde.options.spp
-        for par in self.sde.parser.par_single:
-            print >>out, '# %s = %f' % (par, self.sde.options.__dict__[par])
-        print >>out, '#',
-        for par in self.sde.parser.par_multi:
-            print >>out, par,
-
-        if self.sde.scan_var is not None:
-            print >>out, '%s' % self.sde.scan_var,
-        for i in range(0, self.sde.num_vars):
-            print >>out, 'x%d' % i,
-
-        print >>out, ''
-
-class LoggerOutput(object):
-    def __init__(self, sde, subfiles):
-        self.sde = sde
-        self.log = []
+        self.subfiles = subfiles
 
     def finish_block(self):
         pass
 
-    def data(self, pars):
-        self.log.append(pars)
+    def data(self, **kwargs):
+        pass
 
     def header(self):
         pass
 
-# TODO: Add support for subfiles.
-class HDF5Output(object):
+    def close(self):
+        pass
+
+class NpyOutput(object):
     def __init__(self, sde, subfiles):
         self.sde = sde
-        import tables
+        self.subfiles = subfiles
+        self.curr = {}
+        self.cache = {}
 
     def finish_block(self):
-        self.h5table.flush()
+        global want_save
 
-    def data(self, pars):
-        record = self.h5table.row
-        for i, col in enumerate(self.h5table.cols._v_colnames):
-            record[col] = pars[i]
-        record.append()
+        for name, val in self.curr.iteritems():
+            self.cache.setdefault(name, []).append(val)
+
+        self.curr = {}
+
+        if want_save:
+            self.close()
+            want_save = False
+
+    def data(self, **kwargs):
+        for name, val in kwargs.iteritems():
+            self.curr.setdefault(name, []).append(val)
 
     def header(self):
-        desc = {}
-        pars = []
-        pars.extend(self.sde.parser.par_multi)
+        self.cmdline = '%s' % ' '.join(sys.argv)
+        self.scan_vars = self.sde.scan_vars
+        self.par_multi_ordered = self.sde.par_multi_ordered
 
-        if self.sde.scan_var is not None:
-            pars.append(sde.scan_var)
+    def close(self):
+        out = {}
+        for sv in self.scan_vars:
+            out[sv] = getattr(self.sde.options, sv)
+        for par in self.par_multi_ordered:
+            out[par] = getattr(self.sde.options, par)
 
-        if self.sde.options.omode == 'path':
-            pars.append('t')
-        for i in range(0, self.sde.num_vars):
-            pars.append('x%d' % i)
+        for name, val in self.cache.iteritems():
+            out[name] = numpy.array(val, dtype=self.sde.float)
 
-        for i, par in enumerate(pars):
-            desc[par] = tables.Float32Col(pos=i)
+        numpy.savez(self.sde.options.output, cmdline=self.cmdline, scan_vars=self.scan_vars,
+                    par_multi=self.par_multi_ordered, options=self.sde.options, **out)
 
-        self.h5file = tables.openFile('output.h5', mode = 'w')
-        self.h5group = self.h5file.createGroup('/', 'results', 'simulation results')
-        self.h5table = self.h5file.createTable(self.h5group, 'results', desc, 'results')
-
+class S(object):
+    def __init__(self):
+        self.dt = Symbol('dt')
+        self.samples = Symbol('samples')
 
 class SDE(object):
     """A class representing a SDE equation to solve."""
 
     format_cmd = r"indent -linux -sob -l120 {file} ; sed -i -e '/^$/{{N; s/\n\([\t ]*}}\)$/\1/}}' -e '/{{$/{{N; s/{{\n$/{{/}}' {file}"
 
-    def __init__(self, code, params, global_vars, num_vars, num_noises,
-            noise_map, periodic_map=None):
+    def __init__(self, code, params, num_vars, num_noises,
+            noise_map, period_map=None, args=None, local_vars=None):
         """
         :param code: the code defining the Stochastic Differential Equation
-        :param params: list of simulation parameters defined as tuples
-            (param name, param description)
-        :param global_vars: list of global symbols in the CUDA code
+        :param params: dict of simulation parameters; keys are parameter names,
+            values are descriptions
         :param num_vars: number of variables in the SDE
         :param num_noises: number of independent, white Gaussian noises
         :param noise_map: a dictionary, mapping the variable number to a list of
             ``num_noises`` noise strengths, which can be either 0 or the name of
-            a constant CUDA variable containing the noise strength value
-        :param periodic_map: a dictionary, mapping the variable number to tuples
-            of (period, frequency).  If a variable has a corresponding entry in
-            this dictionary, it will be assumed to be a periodic variable, such
-            that only its value modulo ``period`` is important for the evolution
-            of the system.  Every ``frequency`` * ``samples`` steps, the value
+            a variable containing the noise strength value
+        :param period_map: a dictionary, mapping the variable number to PeriodInfo
+            objects.  If a variable has a corresponding entry in this dictionary,
+            it will be assumed to be a periodic variable, such that only its
+            value modulo ``period`` is important for the evolution of the system.
+
+            Every ``frequency`` * ``samples`` steps, the value
             of this variable will be folded back to the range of [0, period).
-            It's full (unfolded) value will however be retained in the output.
+            Its full (unfolded) value will however be retained in the output.
 
             The folded values will result in faster CUDA code if trigonometric
             functions are used and if the magnitude of their arguments always
@@ -302,11 +275,15 @@ class SDE(object):
         group = OptionGroup(self.parser, 'Output settings')
         group.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
         group.add_option('--output_format', dest='oformat', help='output file format', type='choice',
-                choices=['text', 'hdf_expanded', 'hdf_nested', 'logger'], action='store', default='text')
+                choices=['npy', 'text'], action='store', default='npy')
         group.add_option('--output', dest='output', help='base output filename', type='string', action='store', default=None)
+        group.add_option('--save_every', dest='save_every', help='save output every N seconds', type='int',
+                action='store', default=0)
         self.parser.add_option_group(group)
 
         group = OptionGroup(self.parser, 'Checkpointing settings')
+        group.add_option('--dump_every', dest='dump_every', help='dump system state every N seconds', type='int',
+                action='store', default=0)
         group.add_option('--dump_state', dest='dump_filename', help='save state of the simulation to FILE after it is completed',
                 metavar='FILE', type='string', action='store', default=None)
         group.add_option('--restore_state', dest='restore_filename', help='restore state of the solver from FILE',
@@ -317,20 +294,33 @@ class SDE(object):
                 action='store_true', default=False)
         self.parser.add_option_group(group)
 
-        # List of single-valued system parameters
-        self.parser.par_multi = []
-        # List of multi-valued system parameters
-        self.parser.par_single = []
+        self.parser.par_multi = set()
+        self.parser.par_single = set()
+
         self.sim_params = params
-        self.global_vars = global_vars
         self.num_vars = num_vars
         self.num_noises = num_noises
         self.noise_map = noise_map
-        if periodic_map is None:
-            self.periodic_map = {}
+
+        if period_map is None:
+            self.period_map = {}
         else:
-            self.periodic_map = periodic_map
+            self.period_map = period_map
+
+        self.make_symbols(local_vars)
+
+        # Local variables are defined as lambdas since they need access to the
+        # symbols.  Replace the lambdas with their values here now that the
+        # symbols are defined.
+        self.local_vars = {}
+        if local_vars is not None:
+            for k, v in local_vars.iteritems():
+                self.local_vars[k] = v(self)
+
         self.code = code
+
+        self.last_dump = time.time()
+        self.last_save = time.time()
 
         # Current results.
         self.state_results = []
@@ -340,20 +330,9 @@ class SDE(object):
         self._sim_sym = {}
         self._gpu_sym = {}
 
-        # Additional global symbols which are defined for every simulation.
-        global_vars.append('samples');
-        global_vars.append('dt');
-
-        # By default, assume that all parameters are constants during a single run.
-        # This might not be the case if one of the parameters will be scanned over
-        # in the kernel, in which case it will be removed from the list at a later
-        # time.
-        for par, desc in params:
-            global_vars.append(par)
-
         group = OptionGroup(self.parser, 'Simulation-specific settings')
 
-        for name, help_string in params:
+        for name, help_string in params.iteritems():
             group.add_option('--%s' % name, dest=name, action='callback',
                     callback=_parse_range, type='string', help=help_string,
                     default=None)
@@ -363,7 +342,17 @@ class SDE(object):
         for k, v in noise_map.iteritems():
             if len(v) != num_noises:
                 raise ValueError('The number of noise strengths for variable %s'
-                    'has to be equal to %d.' % (k, num_noises))
+                    ' has to be equal to %d.' % (k, num_noises))
+
+        self.parse_args(args)
+
+    def make_symbols(self, local_vars):
+        """Create a sympy Symbol for each simulation parameter."""
+        self.S = S()
+        for param in self.sim_params.iterkeys():
+            setattr(self.S, param, Symbol(param))
+        for param in local_vars.iterkeys():
+            setattr(self.S, param, Symbol(param))
 
     def parse_args(self, args=None):
         if args is None:
@@ -372,11 +361,12 @@ class SDE(object):
         self.options = Values(self.parser.defaults)
         self.parser.parse_args(args, self.options)
 
-        opt_ok = True
-        for name, hs in self.sim_params:
+        for name, hs in self.sim_params.iteritems():
             if self.options.__dict__[name] == None:
-                print 'Required option "%s" not specified.' % name
-                opt_ok = False
+                raise OptionValueError('Required option "%s" not specified.' % name)
+
+        if self.options.output is None:
+            raise OptionValueError('Required option "output"" not specified.')
 
         if self.options.precision == 'single':
             self.float = numpy.float32
@@ -384,39 +374,30 @@ class SDE(object):
             self.float = numpy.float64
 
         if (self.options.resume or self.options.continue_) and self.options.restore_filename is None:
-            print 'The resume and continue modes require specifying a state file with --restore_state.'
-            opt_ok = False
+            raise OptionValueError('The resume and continue modes require '
+                'a state file to be specified with --restore_state.')
 
-        if opt_ok and self.options.restore_filename is not None:
+        if self.options.restore_filename is not None:
             self.load_state()
 
-        return opt_ok
-
-    # TODO: add support for scanning over a set of parameters
     def _find_cuda_scan_par(self):
         """Automatically determine which parameter is to be scanned over
         in a single kernel run.
         """
-        max_i = -1
         max_par = None
         max = 0
 
         # Look for a parameter with the highest number of values.
-        for i, par in enumerate(self.parser.par_multi):
+        for par in self.parser.par_multi:
             if len(self.options.__dict__[par]) > max:
                 max_par = par
                 max = len(self.options.__dict__[par])
-                max_i = i
 
         # No variable to scan over.
-        if max_i < 0:
+        if max_par is None:
             return None
 
-        # Remove this parameter from the list of parameters with multiple
-        # values, so that we don't loop over it when running the simulation.
-        del self.parser.par_multi[max_i]
-        self.global_vars.remove(max_par)
-
+        self.parser.par_multi.remove(max_par)
         return max_par
 
     def prepare(self, algorithm, init_vectors):
@@ -425,22 +406,44 @@ class SDE(object):
         :param algorithm: the SDE solver to use, sublass of SDESolver
         :param init_vectors: a callable that will be used to set the initial conditions
         """
+        # Determine the scan variable(s).
         if not (self.options.resume or self.options.continue_):
-            scan_var = self._find_cuda_scan_par()
-        else:
-            scan_var = self.scan_var
+            sv = self._find_cuda_scan_par()
+            if sv is None:
+                self.scan_vars = []
+            else:
+                self.scan_vars = [sv]
 
-        if scan_var is not None:
-            scan_set = set([scan_var])
-        else:
-            scan_set = set([])
+            # Create an ordered copy of the list of parameters which have multiple
+            # values.
+            self.par_multi_ordered = list(self.parser.par_multi)
 
+            # Multi-valued parameters that are scanned over are no longer
+            # contained in par_multi at this point.
+            self.global_vars = self.parser.par_single | self.parser.par_multi
+            userdef_global_vars = self.global_vars.copy()
+            self.global_vars.add('dt')
+            self.global_vars.add('samples')
+            self.const_local_vars = {}
+
+            # If a local variable only depends on constant variables, make
+            # it a global constant.
+            for name, value in self.local_vars.iteritems():
+                if set([str(x) for x in value.atoms(Symbol)]) <= self.global_vars:
+                    self.global_vars.add(name)
+                    userdef_global_vars.add(name)
+                    self.const_local_vars[name] = value
+
+            for name in self.const_local_vars.iterkeys():
+                del self.local_vars[name]
+
+        # Prepare the CUDA source.  Load/save it from/to a file if requested.
         if self.options.use_src:
             with open(self.options.use_src, 'r') as file:
                 kernel_source = file.read()
         else:
-            kernel_source = algorithm.get_source(self,
-                    set(self.global_vars) - set(['dt', 'samples']), scan_set)
+            kernel_source = algorithm.get_source(self, userdef_global_vars,
+                   self.scan_vars, self.local_vars)
 
             if self.options.precision == 'double':
                 kernel_source = _convert_to_double(kernel_source)
@@ -452,40 +455,39 @@ class SDE(object):
             if self.options.format_src:
                 os.system(self.format_cmd.format(file=self.options.save_src))
 
-        return self.cuda_prep(init_vectors, kernel_source, scan_var)
+        return self.cuda_prep(init_vectors, kernel_source)
 
     @property
     def scan_var_size(self):
-        if self.scan_var is not None:
-            return len(getattr(self.options, self.scan_var))
-        else:
-            return 1
+        ret = 1
 
-    @property
-    def scan_values(self):
-        if self.scan_var is not None:
-            return getattr(self.options, self.scan_var)
-        else:
-            return None
+        for par in self.scan_vars:
+            ret *= len(getattr(self.options, par))
 
-    def cuda_prep(self, init_vectors, sources, scan_var,
-                  sim_func='AdvanceSim'):
+        return ret
+
+    def get_param(self, name):
+        if name in self.scan_vars:
+            idx = self.scan_vars.index(name)
+            return self._sv[idx]
+        elif name in self._sim_sym:
+            return self._sim_sym[name]
+        else:
+            return getattr(self.options, name)
+
+    def cuda_prep(self, init_vectors, sources, sim_func='AdvanceSim'):
         """Prepare a SDE simulation for execution using CUDA.
 
         init_vectors: a function which takes an instance of this class and the
             variable number as arguments and returns an initialized vector of
             size num_threads
         sources: list of source code files for the simulation
-        scan_var: name of the scan variable.  The scan variable is a system
-            parameter for whose multiple values results are obtained in a
-            single CUDA kernel launch)
         sim_func: name of the kernel advacing the simulation in time
         """
         if self.options.seed is not None and not (self.options.resume or self.options.continue_):
             numpy.random.seed(self.options.seed)
 
         self.init_vectors = init_vectors
-        self.scan_var = scan_var
         self.num_threads = self.scan_var_size * self.options.paths
         self._sim_prep_mod(sources, sim_func)
         self._sim_prep_const()
@@ -495,7 +497,6 @@ class SDE(object):
         # The use of fast math below will result in certain mathematical functions
         # being automaticallky replaced with their faster counterparts prefixed with
         # __, e.g. __sinf().
-
         if self.options.fast_math:
             options=['--use_fast_math']
         else:
@@ -511,18 +512,13 @@ class SDE(object):
         for var in self.global_vars:
             self._gpu_sym[var] = self.mod.get_global(var)[0]
 
-        # Simulation parameters
         samples = numpy.uint32(self.options.samples)
         cuda.memcpy_htod(self._gpu_sym['samples'], samples)
 
         # Single-valued system parameters
         for par in self.parser.par_single:
             self._sim_sym[par] = self.options.__dict__[par]
-
-            # If a variable is not in the dictionary, then it is automatically
-            # calculated and will be set at a later stage.
-            if par in self._gpu_sym:
-                cuda.memcpy_htod(self._gpu_sym[par], self.float(self.options.__dict__[par]))
+            cuda.memcpy_htod(self._gpu_sym[par], self.float(self.options.__dict__[par]))
 
     def _init_rng(self):
         # Initialize the RNG seeds.
@@ -542,27 +538,25 @@ class SDE(object):
             self.vec.append(vt)
             self._gpu_vec.append(cuda.mem_alloc(vt.nbytes))
 
-        if self.scan_var is None:
-            return
+        self._sv = []
+        self._gpu_sv = []
 
-        # Initialize the scan variable.
+        # Initialize the scan variables.  If we're in resume or continue mode, the
+        # scan variables are already initialized and nothing needs to be done.
         if not self.options.resume and not self.options.continue_:
-            self._sv = numpy.kron(self.scan_values, numpy.ones(self.options.paths)).astype(self.float)
-        self._gpu_sv = cuda.mem_alloc(self._sv.nbytes)
-        cuda.memcpy_htod(self._gpu_sv, self._sv)
+            for sv in self.scan_vars:
+                vals = numpy.ones(self.options.paths)
+                for sv2 in reversed(self.scan_vars):
+                    if sv2 != sv:
+                        vals = numpy.kron(numpy.ones_like(getattr(self.options, sv2)), vals)
+                    else:
+                        vals = numpy.kron(getattr(self.options, sv2), vals)
 
-    def set_param(self, name, val):
-        self._sim_sym[name] = val
-        cuda.memcpy_htod(self._gpu_sym[name], self.float(val))
+                self._sv.append(vals.astype(self.float))
 
-    def get_param(self, name):
-        try:
-            return self._sim_sym[name]
-        except KeyError:
-            if name in self.scan_var:
-                return self._sv
-            else:
-                return getattr(self.options, name)
+        for sv in self._sv:
+            self._gpu_sv.append(cuda.mem_alloc(sv.nbytes))
+            cuda.memcpy_htod(self._gpu_sv[-1], sv)
 
     def get_var(self, i, starting=False):
         if starting:
@@ -573,7 +567,7 @@ class SDE(object):
             nx = self.vec_nx
 
         if i in nx:
-            return vec[i] + self.periodic_map[i][0] * nx[i]
+            return vec[i] + self.period_map[i].period * nx[i]
         else:
             return vec[i]
 
@@ -587,16 +581,13 @@ class SDE(object):
     def sim_time_to_iter(self, time_):
         return int(time_ / (self.dt * self.options.samples))
 
-    def simulate(self, req_output, calculated_params, block_size=64, freq_var=None):
+    def simulate(self, req_output, block_size=64, freq_var=None):
         """Run a CUDA SDE simulation.
 
         req_output: a dictionary mapping the the output mode to a list of
             tuples of ``(callable, vars)``, where ``callable`` is a function
             that will compute the values to be returned, and ``vars`` is a list
             of variables that will be passed to this function
-        calculated_params: a function, which given an instance of this
-            class will setup the values of automatically calculated
-            parameters
         block_size: CUDA block size
         freq_var: name of the parameter which is to be interpreted as a
             frequency (determines the step size 'dt').  If ``None``, the
@@ -607,10 +598,8 @@ class SDE(object):
 
         if self.options.oformat == 'text':
             self.output = TextOutput(self, self.req_output.keys())
-        elif self.options.oformat ==  'logger':
-            self.output = LoggerOutput(self, self.req_output.keys())
         else:
-            self.output = HDF5Output(self, self.req_output.keys())
+            self.output = NpyOutput(self, self.req_output.keys())
 
         self.output.header()
 
@@ -621,12 +610,7 @@ class SDE(object):
                 self.req_vars |= set(vars)
 
         self.block_size = block_size
-        arg_types = ['P'] + ['P']*self.num_vars
-
-        if self.scan_var is not None:
-            arg_types += ['P']
-
-        arg_types += [self.float]
+        arg_types = ['P'] + ['P']*self.num_vars + ['P'] * len(self.scan_vars) + [self.float]
         self.advance_sim.prepare(arg_types, block=(block_size, 1, 1))
 
         kern = self.advance_sim
@@ -639,18 +623,20 @@ class SDE(object):
         self._scan_iter = 0
 
         if self.options.dump_filename is not None:
+            signal.signal(signal.SIGUSR2, _sighandler)
             signal.signal(signal.SIGUSR1, _sighandler)
             signal.signal(signal.SIGINT, _sighandler)
             signal.signal(signal.SIGQUIT, _sighandler)
             signal.signal(signal.SIGHUP, _sighandler)
             signal.signal(signal.SIGTERM, _sighandler)
 
-        self._run_nested(self.parser.par_multi, freq_var, calculated_params)
+        self._run_nested(self.par_multi_ordered, freq_var)
+        self.output.close()
 
         if self.options.dump_filename is not None:
             self.dump_state()
 
-    def _run_nested(self, range_pars, freq_var, calculated_params):
+    def _run_nested(self, range_pars, freq_var):
         # No more parameters to loop over, time to actually run the kernel.
         if not range_pars:
             # Reinitialize the RNG here so that there is no interdependence
@@ -666,15 +652,23 @@ class SDE(object):
             self.dt = self.float(period / self.options.spp)
             cuda.memcpy_htod(self._gpu_sym['dt'], self.dt)
 
+            # Evaluate constant local vars.
+            subs = {self.S.dt: self.dt}
+            for k, v in self._sim_sym.iteritems():
+                subs[Symbol(k)] = v
+
+            for name, value in self.const_local_vars.iteritems():
+                cuda.memcpy_htod(self._gpu_sym[name], self.float(value.subs(subs)))
+
             # In the resume mode, we skip all the computations that have already
             # been completed and thus are saved in self.prev_state_results.
             if not self.options.resume:
-                self._run_kernel(calculated_params, period)
+                self._run_kernel(period)
             elif (self._scan_iter == len(self.prev_state_results)-1 and
                     self.prev_state_results[-1][0] < self.iter_to_sim_time(self.max_sim_iter)):
-                self._run_kernel(calculated_params, period)
+                self._run_kernel(period)
             elif self._scan_iter > len(self.prev_state_results)-1:
-                self._run_kernel(calculated_params, period)
+                self._run_kernel(period)
 
             self._scan_iter += 1
         else:
@@ -683,25 +677,20 @@ class SDE(object):
             # Loop over all values of a specific parameter.
             for val in self.options.__dict__[par]:
                 self._sim_sym[par] = self.float(val)
-                if par in self.global_vars:
-                    cuda.memcpy_htod(self._gpu_sym[par], self.float(val))
-                self._run_nested(range_pars[1:], freq_var, calculated_params)
+                cuda.memcpy_htod(self._gpu_sym[par], self.float(val))
+                self._run_nested(range_pars[1:], freq_var)
 
-    def _run_kernel(self, calculated_params, period):
-        calculated_params(self)
-
-        kernel_args = [self._gpu_rng_state] + self._gpu_vec
-        if self.scan_var is not None:
-            kernel_args += [self._gpu_sv]
+    def _run_kernel(self, period):
+        kernel_args = [self._gpu_rng_state] + self._gpu_vec + self._gpu_sv
 
         # Prepare an array for initial value of the variables (after
         # transients).
         if self.options.omode == 'path':
             transient = False
-            every = True
+            pathwise = True
         else:
             transient = True
-            every = False
+            pathwise = False
 
         if (self.options.continue_ or
                 (self.options.resume and self._scan_iter < len(self.prev_state_results))):
@@ -725,15 +714,13 @@ class SDE(object):
             # Reinitialize the positions.
             self.vec = []
             for i in range(0, self.num_vars):
-                # TODO: The arguments should include the current values of the
-                # system parameters.
                 vt = self.init_vectors(self, i).astype(self.float)
                 self.vec.append(vt)
                 cuda.memcpy_htod(self._gpu_vec[i], vt)
 
             # Prepare an array for number of periods for periodic variables.
             self.vec_nx = {}
-            for i, v in self.periodic_map.iteritems():
+            for i, v in self.period_map.iteritems():
                 self.vec_nx[i] = numpy.zeros_like(self.vec[i]).astype(numpy.int64)
 
             if transient:
@@ -744,7 +731,7 @@ class SDE(object):
             self.sim_t = 0.0
 
         def fold_variables(iter_, need_copy):
-            for i, (period, freq) in self.periodic_map.iteritems():
+            for i, (period, freq) in self.period_map.iteritems():
                 if iter_ % freq == 0:
                     if need_copy:
                         cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
@@ -756,7 +743,7 @@ class SDE(object):
 
         init_iter = self.sim_time_to_iter(self.sim_t)
 
-        global want_dump
+        global want_dump, want_exit, want_save
 
         # Actually run the simulation here.
         for j in xrange(init_iter, self.max_sim_iter):
@@ -765,11 +752,16 @@ class SDE(object):
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
             self.sim_t += self.options.samples * self.dt
 
-            if every:
+            if (self.options.save_every > 0 and
+                    (time.time() - self.last_save > self.options.save_every)):
+                want_save = True
+                self.last_save = time.time()
+
+            if pathwise:
                 fold_variables(j, True)
                 self.output_current()
-                if self.scan_var is not None:
-                    self.output.finish_block('main')
+                if self.scan_vars:
+                    self.output.finish_block()
             elif transient and self.sim_t >= self.options.transients * period:
                 for i in range(0, self.num_vars):
                     cuda.memcpy_dtoh(self.vec_start[i], self._gpu_vec[i])
@@ -778,7 +770,10 @@ class SDE(object):
                 self.vec_start_nx = self.vec_nx.copy()
                 fold_variables(j, True)
 
-            if want_dump:
+            if (want_dump or
+                    (self.options.dump_every > 0 and
+                     time.time() - self.last_dump > self.options.dump_every)):
+
                 if self.options.dump_filename is not None:
                     self.save_block()
                     self.dump_state()
@@ -788,15 +783,17 @@ class SDE(object):
                 if want_exit:
                     sys.exit(0)
 
-        if not every:
+        if not pathwise:
             self.output_summary()
 
-        self.output.finish_block('main')
+        self.output.finish_block()
         self.save_block()
 
     def output_current(self):
         vars = {}
 
+        # Get required variables from the compute device and
+        # unfold them.
         for i in self.req_vars:
             cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
             vars[i] = self.get_var(i)
@@ -806,6 +803,9 @@ class SDE(object):
     def output_summary(self):
         vars = {}
 
+        # Get required variables from the compute device and
+        # unfold them.  For each variable, store both the reference
+        # (starting) value and the final one.
         for i in self.req_vars:
             cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
             vars[i] = (self.get_var(i, True), self.get_var(i))
@@ -813,21 +813,26 @@ class SDE(object):
         self._output_results(vars)
 
     def _output_results(self, vars, *misc_pars):
+        # Iterate over all values of the scan parameters.  For each unique
+        # value, calculate the requested output(s).
         for i in range(0, self.scan_var_size):
             out = {}
-            for out_name, v in self.req_output.iteritems():
+            for out_name, _ in self.req_output.iteritems():
                 out[out_name] = []
 
-            for par in self.parser.par_multi:
-                out['main'].append(self._sim_sym[par])
+#            for par in self.parser.par_multi:
+#                out['main'].append(self._sim_sym[par])
             out['main'].extend(misc_pars)
 
-            if self.scan_var is not None:
-                out['main'].append(self._sv[i*self.options.paths])
+#            for sv in self._sv:
+#                out['main'].append(sv[i*self.options.paths])
 
-            for out_name, v in self.req_output.iteritems():
-                for func, req_vars in v:
-                    args = map(lambda x: vars[x], req_vars)
+            for out_name, out_decl in self.req_output.iteritems():
+                for decl in out_decl:
+                    # Map variable numbers to their actual values.
+                    args = map(lambda x: vars[x], decl.vars)
+
+                    # Cut the part of the variables for the current value of the scan vars.
                     if args and type(args[0]) is tuple:
                         args = map(lambda x:
                             (x[0][i*self.options.paths:(i+1)*self.options.paths],
@@ -837,27 +842,19 @@ class SDE(object):
                                 x[i*self.options.paths:(i+1)*self.options.paths],
                                 args)
 
-                    out[out_name].extend(func(self, *args))
+                    # Evaluate the requested function.
+                    out[out_name].extend(decl.func(self, *args))
 
-            for out_name, v in out.iteritems():
-                if v and type(v[0]) is list:
-                    for vv in v:
-                        a = type(vv[0])
-                        if a is numpy.float64 or a is numpy.float32:
-                            self.output.data(vv, out_name, float_=True)
-                        else:
-                            self.output.data(vv, out_name, float_=False)
-                    self.output.finish_block(out_name)
-                else:
-                    self.output.data(v, out_name)
+            self.output.data(**out)
 
     @property
     def state(self):
         """A dictionary representing the current state of the solver."""
 
-        names = ['sim_params', 'global_vars', 'num_vars', 'num_noises', 
-                'noise_map', 'periodic_map', 'code', 'options', 'float',
-                'scan_var']
+        names = ['sim_params', 'num_vars', 'num_noises',
+                 'noise_map', 'period_map', 'code', 'options', 'float',
+                 'scan_vars', 'local_vars' 'const_local_vars', 'global_vars',
+                 'par_multi_ordered']
 
         ret = {}
 
@@ -898,11 +895,13 @@ class SDE(object):
         state['results'] = self.state_results
         state['numpy.random'] = numpy.random.get_state()
 
-        if self.scan_var is not None:
+        if self.scan_vars:
             state['sv'] = self._sv.copy()
 
         with open(self.options.dump_filename, 'w') as f:
             pickle.dump(state, f, pickle.HIGHEST_PROTOCOL)
+
+        self.last_dump = time.time()
 
     def load_state(self):
         """Restore saved state of the solver.

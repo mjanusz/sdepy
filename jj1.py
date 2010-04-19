@@ -3,28 +3,22 @@
 import math
 import numpy
 import sde
+import sympy
 import sys
 
 def init_vector(sdei, i):
     if i == 0:
-        # Positions.
-        #       return numpy.random.uniform(0, 2.0*math.pi, sdei.num_threads)
         return numpy.random.uniform(0.0, 1.0, sdei.num_threads)
     else:
-        # Velocities.
         return numpy.random.uniform(-2.0, 2.0, sdei.num_threads)
 
-def calculated_params(sdei):
-    gam = sdei.get_param('gam')
-    sdei.set_param('ns', numpy.float32(math.sqrt(sdei.options.d0 * sdei.dt * 2.0 * gam)))
+sim_params = {'force': 'DC bias current',
+              'gam': 'damping constant',
+              'omega': 'AC drive frequency',
+              'd0': 'noise strength',
+              'amp': 'AC drive amplitude'}
 
-sim_params = [('force', 'DC bias current'),
-              ('gam', 'damping constant'),
-              ('omega', 'AC drive frequency'),
-              ('d0', 'noise strength'),
-              ('amp', 'AC drive amplitude')]
-
-global_vars = ['ns']
+local_vars = { 'ns': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * 2.0 * sdei.S.gam) }
 
 code = """
     dx0 = x1;
@@ -32,22 +26,21 @@ code = """
 """
 
 ns_map = {1: ['ns']}
-period_map = {0: (1, 1)}
+period_map = {0: sde.PeriodInfo(period=1.0, freq=1)}
 
-sdei = sde.SDE(code, sim_params, global_vars, 2, 1, ns_map, period_map)
-if not sdei.parse_args():
-    sys.exit(1)
+sdei = sde.SDE(code, sim_params, num_vars=2, num_noises=1, noise_map=ns_map, period_map=period_map,
+               local_vars=local_vars)
 
 output = {'path': {
-            'main': [(sde.avg_moments, [0])],
+            'main': [sde.OutputDecl(func=sde.avg_moments, vars=[0])],
             },
           'summary': {
-            'main': [(sde.drift_velocity, [0])],
+            'main': [sde.OutputDecl(func=sde.drift_velocity, vars=[0])],
             }
         }
 
 sdei.prepare(sde.SRK2, init_vector)
-sdei.simulate(output, calculated_params, freq_var='omega')
+sdei.simulate(output, freq_var='omega')
 
 
 
