@@ -10,6 +10,7 @@
 
 # TODO
 
+- restore proper histogram in bistable via masked arrays
 - prev_state_results as a named tuple
   
 RNG test results:
