@@ -177,16 +177,15 @@ class NpyOutput(object):
     def __init__(self, sde, subfiles):
         self.sde = sde
         self.subfiles = subfiles
-        self.curr = {}
+
+        # This dictionary maps the subfile name to a list of lists.
+        # Every entry in the outer list represents one point in the
+        # parameter space.  The inner list represents the results for
+        # a particular set of parameters.
         self.cache = {}
 
     def finish_block(self):
         global want_save
-
-        for name, val in self.curr.iteritems():
-            self.cache.setdefault(name, []).append(val)
-
-        self.curr = {}
 
         if want_save:
             self.close()
@@ -194,7 +193,7 @@ class NpyOutput(object):
 
     def data(self, **kwargs):
         for name, val in kwargs.iteritems():
-            self.curr.setdefault(name, []).append(val)
+            self.cache.setdefault(name, []).append(val)
 
     def header(self):
         self.cmdline = '%s' % ' '.join(sys.argv)
@@ -203,13 +202,21 @@ class NpyOutput(object):
 
     def close(self):
         out = {}
-        for sv in self.scan_vars:
-            out[sv] = getattr(self.sde.options, sv)
+        shape = []
+
         for par in self.par_multi_ordered:
             out[par] = getattr(self.sde.options, par)
+            shape.append(len(out[par]))
+
+        for sv in self.scan_vars:
+            out[sv] = getattr(self.sde.options, sv)
+            shape.append(len(out[sv]))
 
         for name, val in self.cache.iteritems():
+            inner_len = max(len(x) for x in val)
+
             out[name] = numpy.array(val, dtype=self.sde.float)
+            out[name] = numpy.reshape(out[name], shape + [inner_len])
 
         numpy.savez(self.sde.options.output, cmdline=self.cmdline, scan_vars=self.scan_vars,
                     par_multi=self.par_multi_ordered, options=self.sde.options, **out)
