@@ -198,7 +198,11 @@ class TextOutput(object):
         print >>out, '# spp = %d' % self.sde.options.spp
         for par in self.sde.parser.par_single:
             print >>out, '# %s = %f' % (par, self.sde.options.__dict__[par])
-
+        for par in self.sde.par_multi_ordered:
+            print >>out, '# %s = %s' % (par, ' '.join(str(x) for x in self.sde.options.__dict__[par]))
+        for par in self.sde.scan_vars:
+            print >>out, '# %s = %s' % (par, ' '.join(str(x) for x in self.sde.options.__dict__[par]))
+ 
     def close(self):
         pass
 
