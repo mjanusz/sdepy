@@ -1,6 +1,7 @@
 import copy
 import cPickle as pickle
 import math
+import operator
 import os
 import pwd
 import signal
@@ -214,9 +215,10 @@ class NpyOutput(object):
 
         for name, val in self.cache.iteritems():
             inner_len = max(len(x) for x in val)
-
             out[name] = numpy.array(val, dtype=self.sde.float)
-            out[name] = numpy.reshape(out[name], shape + [inner_len])
+            
+            if reduce(operator.mul, shape) * inner_len == reduce(operator.mul, out[name].shape):
+                out[name] = numpy.reshape(out[name], shape + [inner_len])
 
         numpy.savez(self.sde.options.output, cmdline=self.cmdline, scan_vars=self.scan_vars,
                     par_multi=self.par_multi_ordered, options=self.sde.options, **out)
@@ -630,12 +632,13 @@ class SDE(object):
         self._scan_iter = 0
 
         if self.options.dump_filename is not None:
-            signal.signal(signal.SIGUSR2, _sighandler)
             signal.signal(signal.SIGUSR1, _sighandler)
             signal.signal(signal.SIGINT, _sighandler)
             signal.signal(signal.SIGQUIT, _sighandler)
             signal.signal(signal.SIGHUP, _sighandler)
             signal.signal(signal.SIGTERM, _sighandler)
+
+        signal.signal(signal.SIGUSR2, _sighandler)
 
         self._run_nested(self.par_multi_ordered, freq_var)
         self.output.close()
