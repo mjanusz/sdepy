@@ -7,7 +7,7 @@ import pwd
 import signal
 import sys
 import time
-from collections import namedtuple
+from collections import namedtuple, Iterable
 
 from optparse import OptionGroup, OptionParser, OptionValueError, Values
 
@@ -182,7 +182,13 @@ class TextOutput(object):
 
     def data(self, **kwargs):
         for name, val in kwargs.iteritems():
-            rep = [str(x) for x in val]
+            def my_rep(val):
+                if isinstance(val, Iterable):
+                    return ' '.join(my_rep(x) for x in val)
+                else:
+                    return str(val)
+
+            rep = [my_rep(x) for x in val]
             print >>self.out[name], ' '.join(rep)
 
     def header(self):
