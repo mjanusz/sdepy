@@ -161,15 +161,43 @@ class TextOutput(object):
     def __init__(self, sde, subfiles):
         self.sde = sde
         self.subfiles = subfiles
+        self.out = {}
+
+        if sde.options.output is not None:
+            self.out['main'] = open(sde.options.output, 'w')
+
+            for sub in subfiles:
+                if sub == 'main':
+                    continue
+                self.out[sub] = open('%s_%s' % (sde.options.output, sub), 'w')
+        else:
+            if len(subfiles) > 1:
+                raise ValueError('Output file name required so that auxiliary data stream can be saved.')
+
+            self.out['main'] = sys.stdout
 
     def finish_block(self):
-        pass
+        print >>self.out['main'], ''
+        self.out['main'].flush()
 
     def data(self, **kwargs):
-        pass
+        for name, val in kwargs.iteritems():
+            rep = [str(x) for x in val]
+            print >>self.out[name], ' '.join(rep)
 
     def header(self):
-        pass
+        out = self.out['main']
+
+        print >>out, '# %s' % ' '.join(sys.argv)
+        if self.sde.options.seed is not None:
+            print >>out, '# seed = %d' % self.sde.options.seed
+        print >>out, '# sim periods = %d' % self.sde.options.simperiods
+        print >>out, '# transient periods = %d' % self.sde.options.transients
+        print >>out, '# samples = %d' % self.sde.options.samples
+        print >>out, '# paths = %d' % self.sde.options.paths
+        print >>out, '# spp = %d' % self.sde.options.spp
+        for par in self.sde.parser.par_single:
+            print >>out, '# %s = %f' % (par, self.sde.options.__dict__[par])
 
     def close(self):
         pass
@@ -217,7 +245,7 @@ class NpyOutput(object):
             inner_len = max(len(x) for x in val)
             out[name] = numpy.array(val, dtype=self.sde.float)
             
-            if reduce(operator.mul, shape) * inner_len == reduce(operator.mul, out[name].shape):
+            if shape and reduce(operator.mul, shape) * inner_len == reduce(operator.mul, out[name].shape):
                 out[name] = numpy.reshape(out[name], shape + [inner_len])
 
         numpy.savez(self.sde.options.output, cmdline=self.cmdline, scan_vars=self.scan_vars,
@@ -374,7 +402,7 @@ class SDE(object):
             if self.options.__dict__[name] == None:
                 raise OptionValueError('Required option "%s" not specified.' % name)
 
-        if self.options.output is None:
+        if self.options.output is None and self.options.oformat != 'text':
             raise OptionValueError('Required option "output"" not specified.')
 
         if self.options.precision == 'single':
