@@ -39,8 +39,8 @@ output = {'path': {
             }
         }
 
-sdei.prepare(sde.SRK2, init_vector)
-sdei.simulate(output, freq_var='omega')
+sdei.prepare(sde.SRK2, init_vector, freq_var='omega')
+sdei.simulate(output)
 
 
 

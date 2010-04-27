@@ -430,7 +430,7 @@ class SDE(object):
 
         # Look for a parameter with the highest number of values.
         for par in self.parser.par_multi:
-            if len(self.options.__dict__[par]) > max:
+            if len(self.options.__dict__[par]) > max and par != self.freq_var:
                 max_par = par
                 max = len(self.options.__dict__[par])
 
@@ -441,12 +441,18 @@ class SDE(object):
         self.parser.par_multi.remove(max_par)
         return max_par
 
-    def prepare(self, algorithm, init_vectors):
+    def prepare(self, algorithm, init_vectors, freq_var=None):
         """Prepare a SDE simulation.
 
         :param algorithm: the SDE solver to use, sublass of SDESolver
         :param init_vectors: a callable that will be used to set the initial conditions
+        :param freq_var: name of the parameter which is to be interpreted as a
+            frequency (determines the step size 'dt').  If ``None``, the
+            system period will be assumed to be 1.0 and the time step size
+            will be set to 1.0/spp.
         """
+        self.freq_var = freq_var
+
         # Determine the scan variable(s).
         if not (self.options.resume or self.options.continue_):
             sv = self._find_cuda_scan_par()
@@ -622,7 +628,7 @@ class SDE(object):
     def sim_time_to_iter(self, time_):
         return int(time_ / (self.dt * self.options.samples))
 
-    def simulate(self, req_output, block_size=64, freq_var=None):
+    def simulate(self, req_output, block_size=64):
         """Run a CUDA SDE simulation.
 
         req_output: a dictionary mapping the the output mode to a list of
@@ -630,10 +636,6 @@ class SDE(object):
             that will compute the values to be returned, and ``vars`` is a list
             of variables that will be passed to this function
         block_size: CUDA block size
-        freq_var: name of the parameter which is to be interpreted as a
-            frequency (determines the step size 'dt').  If ``None``, the
-            system period will be assumed to be 1.0 and the time step size
-            will be set to 1.0/spp.
         """
         self.req_output = req_output[self.options.omode]
 
@@ -672,13 +674,13 @@ class SDE(object):
 
         signal.signal(signal.SIGUSR2, _sighandler)
 
-        self._run_nested(self.par_multi_ordered, freq_var)
+        self._run_nested(self.par_multi_ordered)
         self.output.close()
 
         if self.options.dump_filename is not None:
             self.dump_state()
 
-    def _run_nested(self, range_pars, freq_var):
+    def _run_nested(self, range_pars):
         # No more parameters to loop over, time to actually run the kernel.
         if not range_pars:
             # Reinitialize the RNG here so that there is no interdependence
@@ -687,8 +689,8 @@ class SDE(object):
             self._init_rng()
 
             # Calculate period and step size.
-            if freq_var is not None:
-                period = 2.0 * math.pi / self._sim_sym[freq_var]
+            if self.freq_var is not None:
+                period = 2.0 * math.pi / self._sim_sym[self.freq_var]
             else:
                 period = 1.0
             self.dt = self.float(period / self.options.spp)
@@ -720,7 +722,7 @@ class SDE(object):
             for val in self.options.__dict__[par]:
                 self._sim_sym[par] = self.float(val)
                 cuda.memcpy_htod(self._gpu_sym[par], self.float(val))
-                self._run_nested(range_pars[1:], freq_var)
+                self._run_nested(range_pars[1:])
 
     def _run_kernel(self, period):
         kernel_args = [self._gpu_rng_state] + self._gpu_vec + self._gpu_sv
