@@ -1,3 +1,9 @@
+Current bugs/limitations:
+-------------------------
+- scanning over the frequency variable on the CUDA device is impossible
+
+TODO
+----
 - make it possible to run more than 64k * 64 threads at the same time
 - automatically finish run when the result is not changing?
 - doc: compare efficiency of the different RNGs
@@ -7,11 +13,8 @@
 - the folding of arguments of trigonometric functions should be to -pi, pi to make the intrinsic functions more precise
 - the folding should be possible to do directly in the kernels
 - optimize state dumping for large scans.
-
-# TODO
-
 - restore proper histogram in bistable via masked arrays
-- prev_state_results as a named tuple
+- make prev_state_results a named tuple
   
 RNG test results:
 
