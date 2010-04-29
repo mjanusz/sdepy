@@ -63,33 +63,37 @@ if xidx < yidx:
 
 print 'min/max: ', np.min(dplot[slicearg]), np.max(dplot[slicearg])
 
-a = abs(np.min(dplot[slicearg]))
+a = abs(min(np.min(dplot[slicearg]), 0.0))
 b = abs(np.max(dplot[slicearg]))
 sc = a / (a+b) / 0.5
 sc2 = b / (a+b) / 0.5
 
 anm = {
-    'red': (
+    'red': [
         (0., 0.0, 0.0),
         (sc*0.5, 1.0, 1.0),
         (sc*0.5 + (0.817460-0.5)*sc2, 1.0, 1.0),
-        (1.0, 0.8, 0.8)),
+        (1.0, 0.8, 0.8)],
 
-    'green': (
+    'green': [
         (0., 0.0, 0.0),
         (sc*0.4, 1.0, 1.0),
         (sc*0.5, 1.0, 1.0),
         (sc*0.5 + (0.626984-0.5)*sc2, 1.0, 1.0),
         (sc*0.5 + (0.817460-0.5)*sc2, 0.6, 0.6),
-        (1.0, 0.0, 0.0)),
+        (1.0, 0.0, 0.0)],
 
-    'blue': (
+    'blue': [
         (0.0, 0.4, 0.4),
         (sc*0.25, 1.0, 1.0),
         (sc*0.5, 1.0, 1.0),
         (sc*0.5 + (0.626984-0.5)*sc2, 0., 0.),
-        (1.0, 0.0, 0.0))
+        (1.0, 0.0, 0.0)]
     }
+
+if sc == 0.0:
+    for k in anm.iterkeys():
+        anm[k] = anm[k][1:]
 
 anm_cmap = LinearSegmentedColormap('ANM', anm)
 plt.register_cmap(cmap=anm_cmap)
