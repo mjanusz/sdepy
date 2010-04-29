@@ -1,5 +1,8 @@
 #!/usr/bin/python
-
+#
+# 1) Single Josephson junction driven by a DC and AC current, with noise.
+# 2) Underdamped Brownian particle in a spatially periodic, oscillating,
+#    titled washboard potential.
 import math
 import numpy
 import sde
