@@ -98,13 +98,13 @@ if sc == 0.0:
 anm_cmap = LinearSegmentedColormap('ANM', anm)
 plt.register_cmap(cmap=anm_cmap)
 
-aspect = float(len(data[pars[xidx]])) / len(data[pars[yidx]])
-aspect = min(max(aspect, 0.5), 2)
+aspect = ((data[pars[xidx]][-1] - data[pars[xidx]][0]) /
+          (data[pars[yidx]][-1] - data[pars[yidx]][0])) / 1.5
 
 imshow(dplot[slicearg],
        extent=(data[pars[xidx]][0], data[pars[xidx]][-1],
                data[pars[yidx]][0], data[pars[yidx]][-1]),
-       aspect = aspect,
+       aspect=aspect,
 #       interpolation='sinc',
        interpolation='nearest',
        cmap = anm_cmap,
