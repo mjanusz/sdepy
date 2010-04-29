@@ -1,5 +1,16 @@
 #!/usr/bin/python
 
+# Plot average velocity using a smart color map designed to highlight
+# transport properties of the system.
+#
+# Arguments:
+#  datafile
+#  name of the parameter to plot on the X axis
+#  name of the parameter to plot on the Y axis
+#  [indices for the remining multiple-valued parameter]
+#  [index of the innermost dimension if > 1]
+#  [output file name]
+
 import sys
 import numpy as np
 
@@ -41,103 +52,9 @@ for i in range(len(pars)):
 
 if data['main'].shape[-1] > 1:
     slicearg.append(sys.argv[argidx])
+    argidx += 1
 else:
     slicearg.append(0)
-
-cdict1 = {'red':   ((0.0, 0.0, 0.0),
-                   (0.5, 0.0, 0.1),
-                   (1.0, 1.0, 1.0)),
-         'green': ((0.0, 0.0, 0.0),
-                   (1.0, 0.0, 0.0)),
-         'blue':  ((0.0, 0.0, 1.0),
-                   (0.5, 0.1, 0.0),
-                   (1.0, 0.0, 0.0))
-        }
-
-cdict2 = {'red':   ((0.0, 0.0, 0.0),
-                   (0.5, 0.0, 1.0),
-                   (1.0, 0.1, 1.0)),
-         'green': ((0.0, 0.0, 0.0),
-                   (1.0, 0.0, 0.0)),
-         'blue':  ((0.0, 0.0, 0.1),
-                   (0.5, 1.0, 0.0),
-                   (1.0, 0.0, 0.0))
-        }
-
-invjet = {'red':   ((0., 0, 0),
-                    (0.35, 0, 0),
-                    (0.49, 0, 0.5),
-                    (0.69,1, 1),
-                    (1, 1, 1)),
-          'green': ((0., 0, 0),
-                    (0.125,0, 0),
-                    (0.375,1, 1),
-                    (0.49, 1, 0),
-                    (0.61,0,0),
-                    (1, 1, 1)),
-          'blue':  ((0., 0.5, 0.5),
-                    (0.11, 1, 1),
-                    (0.49, 1, 0),
-                    (0.65,0, 0),
-                    (1, 0, 0))}
-
-pm3d = {'red': ((0., 0, 0),
-                (0.25, 0.7, 0.7),
-                (0.5, 0.4, 0.6),
-                (1.0, 1.0, 1.0)),
-        'green': ((0., 0, 0),
-                  (0.5, 0.0, 0.0),
-                  (1.0, 1.0, 1.0)),
-        'blue': ((0., 0.0, 0.0),
-                (0.25, 0.8, 0.8),
-                (0.5, 0.0, 0),
-                (1.0, 0, 0))
-        }
-
-anm = {
-    'red': (
-        (0.0, 0, 0),
-        (0.5, 1, 1),
-        (0.75, 1, 1),
-        (1, 1, 1)),
-    'green': (
-        (0.0, 0, 0),
-        (0.48, 1, 1),
-        (0.5, 1, 1),
-        (0.75, 0.5, 0.5),
-        (1, 1, 1)),
-
-    'blue': (
-        (0.0, 0.5, 0.5),
-        (0.5, 1, 1),
-        (1, 0, 0))
-    }
-
-anm2 = {
-    'red': (
-        (0., 0.0, 0.0),
-        (0.5, 1.0, 1.0),
-        (0.817460, 1.0, 1.0),
-        (1.0, 0.8, 0.8)),
-
-    'green': (
-        (0., 0.0, 0.0),
-        (0.4, 1.0, 1.0),
-        (0.5, 1.0, 1.0),
-        (0.626984, 1.0, 1.0),
-        (0.817460, 0.6, 0.6),
-        (1.0, 0.0, 0.0)),
-
-    'blue': (
-        (0.0, 0.4, 0.4),
-        (0.25, 1.0, 1.0),
-        (0.5, 1.0, 1.0),
-        (0.626984, 0., 0.),
-        (1.0, 0.0, 0.0))
-    }
-
-blue_red2 = LinearSegmentedColormap('BlueRed2', anm2)
-plt.register_cmap(cmap=blue_red2)
 
 dplot = data['main']
 
@@ -146,23 +63,53 @@ if xidx < yidx:
 
 print 'min/max: ', np.min(dplot[slicearg]), np.max(dplot[slicearg])
 
+a = abs(np.min(dplot[slicearg]))
+b = abs(np.max(dplot[slicearg]))
+sc = a / (a+b) / 0.5
+
+anm = {
+    'red': (
+        (0., 0.0, 0.0),
+        (sc*0.5, 1.0, 1.0),
+        (sc*0.817460, 1.0, 1.0),
+        (1.0, 0.8, 0.8)),
+
+    'green': (
+        (0., 0.0, 0.0),
+        (sc*0.4, 1.0, 1.0),
+        (sc*0.5, 1.0, 1.0),
+        (sc*0.626984, 1.0, 1.0),
+        (sc*0.817460, 0.6, 0.6),
+        (1.0, 0.0, 0.0)),
+
+    'blue': (
+        (0.0, 0.4, 0.4),
+        (sc*0.25, 1.0, 1.0),
+        (sc*0.5, 1.0, 1.0),
+        (sc*0.626984, 0., 0.),
+        (1.0, 0.0, 0.0))
+    }
+
+anm_cmap = LinearSegmentedColormap('ANM', anm)
+plt.register_cmap(cmap=anm_cmap)
+
+aspect = float(len(data[pars[xidx]])) / len(data[pars[yidx]])
+aspect = min(max(aspect, 0.5), 2)
+
 imshow(dplot[slicearg],
        extent=(data[pars[xidx]][0], data[pars[xidx]][-1],
                data[pars[yidx]][0], data[pars[yidx]][-1]),
-       vmin = -1.0,
-       vmax = 1.0,
-       aspect = float(len(data[pars[xidx]])) / len(data[pars[yidx]]) / 2,
+       aspect = aspect,
 #       interpolation='sinc',
        interpolation='nearest',
-#       cmap=get_cmap('RdBu'),
-       cmap = blue_red2,
+       cmap = anm_cmap,
        origin='lower')
 ylabel(yvar)
 xlabel(xvar)
 colorbar()
 
-#if len(sys.argv) > 3:
-#    savefig(sys.argv[3])
-#else:
-ion()
-show()
+if len(sys.argv) > argidx:
+    savefig(sys.argv[argidx])
+else:
+    ion()
+    show()
