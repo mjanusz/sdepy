@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 
 from pylab import *
 
-def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx):
+def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
     a = abs(min(np.min(dplot[slicearg]), 0.0))
     b = abs(np.max(dplot[slicearg]))
     sc = a / (a+b) / 0.5
@@ -71,6 +71,7 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx):
            origin='lower')
     ylabel(yvar)
     xlabel(xvar)
+    title(desc)
     colorbar()
 
 if __name__ == '__main__':
@@ -82,6 +83,7 @@ if __name__ == '__main__':
     pars = list(data['par_multi']) + list(data['scan_vars'])
 
     print 'Parameters are (in order): ', pars
+    print 'Shape: ', data['main'].shape
 
     idxs = set(range(len(pars)))
     xidx = pars.index(xvar)
@@ -93,12 +95,14 @@ if __name__ == '__main__':
     # which values to use for the remanining parameters
     argidx = 4
     slicearg = []
+    desc = ''
 
     for i in range(len(pars)):
         if i in idxs:
             slicearg.append(int(sys.argv[argidx]))
             argidx += 1
             print '%s = %s' % (pars[i], data[pars[i]][slicearg[-1]])
+            desc += '%s=%s ' % (pars[i], data[pars[i]][slicearg[-1]])
         else:
             slicearg.append(slice(None))
 
@@ -115,7 +119,7 @@ if __name__ == '__main__':
 
     print 'min/max: ', np.min(dplot[slicearg]), np.max(dplot[slicearg])
 
-    make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx)
+    make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc)
 
     if len(sys.argv) > argidx:
         savefig(sys.argv[argidx])
