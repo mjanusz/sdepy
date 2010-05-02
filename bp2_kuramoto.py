@@ -17,18 +17,19 @@ def init_vector(sdei, i):
 sim_params = {'f1': 'constant force on the 1st particle',
               'f2': 'constant force on the 2nd particle',
               'gam1': 'damping for the 1st particle',
+              'gam2': 'damping for the 2nd particle',
               'is': 'interaction strength',
               'd0': 'noise strength',
               'amp': 'AC drive amplitude'}
 
 local_vars = { 
         'ns0': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * 2.0 / sdei.S.gam1),
-        'ns1': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * 2.0 / sdei.S.gam1),
+        'ns1': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * 2.0 / sdei.S.gam2),
         }
 
 code = """
     dx0 = (is * sinf(x0 - x1) + f1 + amp * cosf(t)) / gam1;
-    dx1 = (-is * sinf(x0 - x1) + f2) / gam1;
+    dx1 = (-is * sinf(x0 - x1) + f2) / gam2;
 """
 
 ns_map = {0: ['ns0', 0], 1: [0, 'ns1']}
