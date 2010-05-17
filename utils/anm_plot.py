@@ -59,6 +59,11 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
         for k in anm.iterkeys():
             anm[k][0] = (0., 1.0, 1.0)
 
+    if b < 0.001:
+        anm['red'] = anm['red'][0:1] + [(1, 1, 1)]
+        anm['green'] = anm['green'][0:2] + [(1, 1, 1)]
+        anm['blue'] = anm['blue'][0:2] + [(1, 1 ,1)]
+
     anm_cmap = LinearSegmentedColormap('ANM', anm)
     plt.register_cmap(cmap=anm_cmap)
 
