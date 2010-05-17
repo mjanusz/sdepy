@@ -54,6 +54,10 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
     if sc == 0.0:
         for k in anm.iterkeys():
             anm[k] = anm[k][1:]
+    # Fix color scale if only positive values are present.
+    elif a < 0.001:
+        for k in anm.iterkeys():
+            anm[k][0] = (0., 1.0, 1.0)
 
     anm_cmap = LinearSegmentedColormap('ANM', anm)
     plt.register_cmap(cmap=anm_cmap)
