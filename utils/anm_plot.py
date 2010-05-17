@@ -7,7 +7,7 @@
 #  datafile
 #  name of the parameter to plot on the X axis
 #  name of the parameter to plot on the Y axis
-#  [indices for the remining multiple-valued parameter]
+#  [indices for the remaining multiple-valued parameter]
 #  [index of the innermost dimension if > 1]
 #  [output file name]
 
@@ -65,6 +65,8 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
     aspect = ((data[pars[xidx]][-1] - data[pars[xidx]][0]) /
               (data[pars[yidx]][-1] - data[pars[yidx]][0])) / 1.5
 
+    clf()
+    cla()
     imshow(dplot[slicearg],
            extent=(data[pars[xidx]][0], data[pars[xidx]][-1],
                    data[pars[yidx]][0], data[pars[yidx]][-1]),
@@ -77,6 +79,78 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
     xlabel(xvar)
     title(desc)
     colorbar()
+
+def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, postfix):
+    # Scan the command line arguments for info about
+    # which values to use for the remaining parameters.
+    iidx = argidx - 4
+
+    if iidx < len(pars) - 2:
+        if iidx == xidx:
+            # This parameter is assigned to one of the axes.
+            slicearg.append(slice(None))
+            iidx += 1
+        elif iidx > xidx:
+            iidx += 1
+
+        if iidx == yidx:
+            # This parameter is assigned to one of the axes.
+            slicearg.append(slice(None))
+            iidx += 1
+        elif iidx > yidx:
+            iidx += 1
+
+        if sys.argv[argidx] == '-':
+            for val in range(len(data[pars[iidx]])):
+                sa = slicearg + [val]
+                print '%s = %s' % (pars[iidx], data[pars[iidx]][sa[-1]])
+                desc2 = desc + ' %s=%s ' % (pars[iidx], data[pars[iidx]][sa[-1]])
+                pfx = postfix + '_%s%03d' % (pars[iidx], sa[-1])
+                multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa,
+                        desc2, pfx)
+        else:
+            sa = slicearg + [int(sys.argv[argidx])]
+            print '%s = %s' % (pars[iidx], data[pars[iidx]][sa[-1]])
+            desc2 = desc + ' %s=%s ' % (pars[iidx], data[pars[iidx]][sa[-1]])
+            pfx = postfix + '_%s%03d' % (pars[iidx], sa[-1])
+            multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa, desc2,
+                    pfx)
+    else:
+        if iidx <= xidx:
+            slicearg.append(slice(None))
+        if iidx <= yidx:
+            slicearg.append(slice(None))
+
+        def do_plot(pfix):
+            dplot = data['main']
+            if xidx < yidx:
+                dplot = np.swapaxes(dplot, xidx, yidx)
+
+            print 'min/max: ', np.min(dplot[slicearg]), np.max(dplot[slicearg])
+            make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc)
+
+            if len(sys.argv) > argidx:
+                savefig(sys.argv[argidx] + pfix + '.png')
+            else:
+                ion()
+                show()
+
+        # More than 1 value on the innermost axis?
+        if data['main'].shape[-1] > 1:
+            sorig = slicearg
+            if sys.argv[argidx] == '-':
+                argidx += 1
+                for i in range(data['main'].shape[-1]):
+                    slicearg = sorig + [i]
+                    do_plot(postfix + '_in%d' % i)
+            else:
+                slicearg.append(int(sys.argv[argidx]))
+                argidx += 1
+                do_plot(postfix)
+        else:
+            slicearg.append(0)
+            do_plot(postfix)
+
 
 if __name__ == '__main__':
     fname = sys.argv[1]
@@ -95,38 +169,9 @@ if __name__ == '__main__':
     idxs.remove(xidx)
     idxs.remove(yidx)
 
-    # Now scan the command line arguments for info about
-    # which values to use for the remanining parameters
     argidx = 4
     slicearg = []
     desc = ''
 
-    for i in range(len(pars)):
-        if i in idxs:
-            slicearg.append(int(sys.argv[argidx]))
-            argidx += 1
-            print '%s = %s' % (pars[i], data[pars[i]][slicearg[-1]])
-            desc += '%s=%s ' % (pars[i], data[pars[i]][slicearg[-1]])
-        else:
-            slicearg.append(slice(None))
+    multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, '')
 
-    if data['main'].shape[-1] > 1:
-        slicearg.append(sys.argv[argidx])
-        argidx += 1
-    else:
-        slicearg.append(0)
-
-    dplot = data['main']
-
-    if xidx < yidx:
-        dplot = np.swapaxes(dplot, xidx, yidx)
-
-    print 'min/max: ', np.min(dplot[slicearg]), np.max(dplot[slicearg])
-
-    make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc)
-
-    if len(sys.argv) > argidx:
-        savefig(sys.argv[argidx])
-    else:
-        ion()
-        show()
