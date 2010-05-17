@@ -29,7 +29,7 @@ code = """
 """
 
 ns_map = {1: ['ns']}
-period_map = {0: sde.PeriodInfo(period=1.0, freq=1)}
+period_map = {0: sde.PeriodInfo(period=2.0 * math.pi, freq=1)}
 
 sdei = sde.SDE(code, sim_params, num_vars=2, num_noises=1, noise_map=ns_map, period_map=period_map,
                local_vars=local_vars)
