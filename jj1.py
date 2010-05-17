@@ -25,7 +25,7 @@ local_vars = { 'ns': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * 2.0 * sdei.
 
 code = """
     dx0 = x1;
-    dx1 = -2.0f * PI * cosf(2.0f * PI * x0) + amp * cosf(omega * t) + force - gam * x1;
+    dx1 = sinf(x0) + amp * cosf(omega * t) + force - gam * x1;
 """
 
 ns_map = {1: ['ns']}
