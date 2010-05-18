@@ -24,14 +24,14 @@ sim_params = {'i1': 'constant force on the 1st particle',
               'a2': 'AC drive amplitude for the 2nd particle',
               'omega': 'AC drive frequency'}
 
-local_vars = { 
+local_vars = {
         'ns0': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * (sdei.S.beta - sdei.S.alpha)),
         'ns1': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * (sdei.S.beta - sdei.S.alpha) * sdei.S.beta * sdei.S.alpha)
         }
 
 code = """
-    dx0 = i1 - ic1 * sinf(x0) + alpha * (i2 - (2.0f - ic1) * sinf(x1)) + (a1 + alpha * a2) * sinf(omega * t);
-    dx1 = alpha * (beta * (i2 - (2.0f - ic1) * sinf(x1)) + (i1 - sinf(x0)) + (a1 + beta * a2)) * sinf(omega * t);
+    dx0 = i1 - ic1 * sinf(x0) + alpha * (i2 - (2.0f - ic1) * sinf(x1)) + (a1 + alpha * a2) * cosf(omega * t);
+    dx1 = alpha * (beta * (i2 - (2.0f - ic1) * sinf(x1)) + (i1 - sinf(x0)) + (a1 + beta * a2)) * cosf(omega * t);
 """
 
 ns_map = {0: ['ns0', 0], 1: [0, 'ns1']}
