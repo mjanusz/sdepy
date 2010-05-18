@@ -254,7 +254,7 @@ class NpyOutput(object):
         for name, val in self.cache.iteritems():
             inner_len = max(len(x) for x in val)
             out[name] = numpy.array(val, dtype=self.sde.float)
-            
+
             if shape and reduce(operator.mul, shape) * inner_len == reduce(operator.mul, out[name].shape):
                 out[name] = numpy.reshape(out[name], shape + [inner_len])
 
@@ -309,6 +309,8 @@ class SDE(object):
         group.add_option('--no-fast-math', dest='fast_math',
                 help='do not use faster intrinsic mathematical functions everywhere',
                 action='store_false', default=True)
+        group.add_options('--deterministic', dest='deterministic', help='do not generate any noises',
+                action='store_true', default=False)
         self.parser.add_option_group(group)
 
         group = OptionGroup(self.parser, 'Debug settings')
@@ -392,6 +394,9 @@ class SDE(object):
                     ' has to be equal to %d.' % (k, num_noises))
 
         self.parse_args(args)
+
+        if self.options.deterministic:
+            self.num_noises = 0
 
     def make_symbols(self, local_vars):
         """Create a sympy Symbol for each simulation parameter."""
