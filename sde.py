@@ -309,7 +309,7 @@ class SDE(object):
         group.add_option('--no-fast-math', dest='fast_math',
                 help='do not use faster intrinsic mathematical functions everywhere',
                 action='store_false', default=True)
-        group.add_options('--deterministic', dest='deterministic', help='do not generate any noises',
+        group.add_option('--deterministic', dest='deterministic', help='do not generate any noises',
                 action='store_true', default=False)
         self.parser.add_option_group(group)
 
@@ -397,6 +397,7 @@ class SDE(object):
 
         if self.options.deterministic:
             self.num_noises = 0
+            self.noise_map = []
 
     def make_symbols(self, local_vars):
         """Create a sympy Symbol for each simulation parameter."""
