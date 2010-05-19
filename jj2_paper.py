@@ -20,7 +20,7 @@ sim_params = {'i1': 'constant force on the 1st particle',
               'beta': 'coupling strength 2',
               'ic1': 'critical current',
               'd0': 'noise strength',
-              'b': 'AC drive amplitude'
+              'b': 'AC drive amplitude',
               'omega': 'AC drive frequency'}
 
 local_vars = {
@@ -30,7 +30,7 @@ local_vars = {
 
 code = """
     dx0 = i1 - ic1 * sinf(x0) + alpha * (i2 - (2.0f - ic1) * sinf(x1)) + b * sinf(omega * t);
-    dx1 = alpha * (beta * (i2 - (2.0f - ic1) * sinf(x1)) + (i1 - sinf(x0)) + b * sinf(omega * t);
+    dx1 = alpha * (beta * (i2 - (2.0f - ic1) * sinf(x1)) + (i1 - sinf(x0))) + b * sinf(omega * t);
 """
 
 ns_map = {0: ['ns0', 0], 1: [0, 'ns1']}
