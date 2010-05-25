@@ -13,6 +13,7 @@
 
 import sys
 import numpy as np
+import math
 
 import matplotlib
 matplotlib.use('GTKAgg')
@@ -23,8 +24,9 @@ import matplotlib.pyplot as plt
 from pylab import *
 
 def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
-    a = abs(min(np.min(dplot[slicearg]), 0.0))
-    b = abs(np.max(dplot[slicearg]))
+    a = abs(min(np.nanmin(dplot[slicearg]), 0.0))
+    b = abs(np.nanmax(dplot[slicearg]))
+
     sc = a / (a+b) / 0.5
     sc2 = b / (a+b) / 0.5
 
@@ -70,8 +72,9 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
     aspect = ((data[pars[xidx]][-1] - data[pars[xidx]][0]) /
               (data[pars[yidx]][-1] - data[pars[yidx]][0])) / 1.5
 
-    clf()
     cla()
+    clf()
+    axes([0.1,-0.05,0.95,1.0])
     imshow(dplot[slicearg],
            extent=(data[pars[xidx]][0], data[pars[xidx]][-1],
                    data[pars[yidx]][0], data[pars[yidx]][-1]),
@@ -83,7 +86,7 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
     ylabel(yvar)
     xlabel(xvar)
     title(desc)
-    colorbar()
+    colorbar(shrink=0.75)
 
 def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, postfix):
     # Scan the command line arguments for info about
@@ -131,11 +134,11 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, postf
             if xidx < yidx:
                 dplot = np.swapaxes(dplot, xidx, yidx)
 
-            print 'min/max: ', np.min(dplot[slicearg]), np.max(dplot[slicearg])
+            print 'min/max/nans?: ', np.nanmin(dplot[slicearg]), np.nanmax(dplot[slicearg]), np.any(np.isnan(dplot[slicearg]))
             make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc)
 
             if len(sys.argv) > argidx:
-                savefig(sys.argv[argidx] + pfix + '.png')
+                savefig(sys.argv[argidx] + pfix + '.png', bbox_inches='tight')
             else:
                 ion()
                 show()
@@ -159,14 +162,14 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, postf
 
 if __name__ == '__main__':
     fname = sys.argv[1]
-    xvar = sys.argv[2]
-    yvar = sys.argv[3]
-
     data = np.load(fname)
     pars = list(data['par_multi']) + list(data['scan_vars'])
 
     print 'Parameters are (in order): ', pars
     print 'Shape: ', data['main'].shape
+
+    xvar = sys.argv[2]
+    yvar = sys.argv[3]
 
     idxs = set(range(len(pars)))
     xidx = pars.index(xvar)
