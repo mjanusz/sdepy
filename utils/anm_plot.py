@@ -23,6 +23,20 @@ import matplotlib.pyplot as plt
 
 from pylab import *
 
+var_disp = {
+    'a1': r'$a_1$',
+    'a2': r'$a_2$',
+    'omega': r'$\omega$',
+}
+
+def var_display(name):
+    global var_disp
+
+    if name in var_disp:
+        return var_disp[name]
+    else:
+        return name
+
 def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
     a = abs(min(np.nanmin(dplot[slicearg]), 0.0))
     b = abs(np.nanmax(dplot[slicearg]))
@@ -83,8 +97,8 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
 #       interpolation='nearest',
            cmap = anm_cmap,
            origin='lower')
-    ylabel(yvar)
-    xlabel(xvar)
+    ylabel(var_display(yvar))
+    xlabel(var_display(xvar))
     title(desc)
     colorbar(shrink=0.75)
 
