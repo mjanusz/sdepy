@@ -49,6 +49,8 @@ def var_display(name):
         return name
 
 def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
+    global options
+
     a = abs(min(np.nanmin(dplot[slicearg]), 0.0))
     b = abs(np.nanmax(dplot[slicearg]))
 
@@ -110,7 +112,9 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
            origin='lower')
     ylabel(var_display(yvar))
     xlabel(var_display(xvar))
-    title(desc)
+
+    if options.format != 'pdf':
+        title(desc)
     colorbar(shrink=0.75)
 
 def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
