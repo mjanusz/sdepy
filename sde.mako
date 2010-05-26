@@ -93,9 +93,13 @@ __device__ inline void RHS(
 					%if j == noises-1 and noises % 2:
 						## Reuse a noise already calculated during the
 						## first set of calls to bm_trans.
-						+ ${n}*n${j+1}
+						%if n != 0.0:
+							+ ${n}*n${j+1}
+						%endif
 					%else:
-						+ ${n}*n${j}
+						%if n != 0.0:
+							+ ${n}*n${j}
+						%endif
 					%endif
 				%endfor
 			%endif
