@@ -101,7 +101,6 @@ __device__ inline void RHS(
 			%endif
 			;
 		%endfor
-		t = ct + i*dt;
 	}
 </%def>
 
