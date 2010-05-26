@@ -11,7 +11,7 @@ import sys
 
 def init_vector(sdei, i):
     if i == 0:
-        return numpy.random.uniform(0.0, 1.0, sdei.num_threads)
+        return numpy.random.uniform(0.0, 2.0 * math.pi, sdei.num_threads)
     else:
         return numpy.random.uniform(-2.0, 2.0, sdei.num_threads)
 
