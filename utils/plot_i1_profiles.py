@@ -13,6 +13,9 @@ import numpy as np
 import matplotlib
 matplotlib.use('GTKAgg')
 
+import optparse
+from optparse import OptionGroup, OptionParser, OptionValueError
+
 from pylab import *
 
 def prep_array(name, init_val):
@@ -23,9 +26,24 @@ def prep_array(name, init_val):
     out['noisy_%s_name' % name] = ['', '']
     return out
 
+parser = OptionParser()
+parser.add_option('--format', dest='format', type='choice',
+        choices=['png', 'pdf'], default='png')
+parser.add_option('--figw', dest='figw', type='float', default=8.0)
+options, args = parser.parse_args()
+
 intensity = prep_array('min', 0)
 extent = prep_array('max', 0)
 noise_induced = prep_array('max', -1000)
+
+if options.format == 'pdf':
+    rc('savefig', dpi=300.0)
+    rc('figure', figsize=[options.figw, 0.75 * options.figw])
+    rc('text', usetex=True, fontsize=10)
+    rc('axes', labelsize=10)
+    rc('legend', fontsize=10)
+    rc('xtick', labelsize=8)
+    rc('ytick', labelsize=8)
 
 def mmax(arg):
     if len(arg):
@@ -89,7 +107,7 @@ for fname in glob.glob('profiles/*.npz'):
     xlabel(r'$i_1$')
     legend(loc='lower right')
     grid()
-    savefig(fname.replace('.npz', '.png'))
+    savefig(fname.replace('.npz', '.' + options.format))
 
 print 'Stats:'
 print '------'
