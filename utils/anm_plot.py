@@ -21,12 +21,23 @@ matplotlib.use('GTKAgg')
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.pyplot as plt
 
+import optparse
+from optparse import OptionGroup, OptionParser, OptionValueError
+
 from pylab import *
+
+parser = OptionParser()
+parser.add_option('--format', dest='format', type='choice',
+        choices=['png', 'pdf'], default='png')
+parser.add_option('--figw', dest='figw', type='float', default=8.0)
+options, args = parser.parse_args()
 
 var_disp = {
     'a1': r'$a_1$',
     'a2': r'$a_2$',
     'omega': r'$\omega$',
+    'amp': r'$a$',
+    'gam': r'$\gamma$',
 }
 
 def var_display(name):
@@ -102,10 +113,11 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
     title(desc)
     colorbar(shrink=0.75)
 
-def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, postfix):
+def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
+        postfix, args):
     # Scan the command line arguments for info about
     # which values to use for the remaining parameters.
-    iidx = argidx - 4
+    iidx = argidx - 3
 
     if iidx < len(pars) - 2:
         if iidx == xidx:
@@ -122,21 +134,21 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, postf
         elif iidx > yidx:
             iidx += 1
 
-        if sys.argv[argidx] == '-':
+        if args[argidx] == '-':
             for val in range(len(data[pars[iidx]])):
                 sa = slicearg + [val]
                 print '%s = %s' % (pars[iidx], data[pars[iidx]][sa[-1]])
                 desc2 = desc + ' %s=%s ' % (pars[iidx], data[pars[iidx]][sa[-1]])
                 pfx = postfix + '_%s%03d' % (pars[iidx], sa[-1])
                 multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa,
-                        desc2, pfx)
+                        desc2, pfx, args)
         else:
-            sa = slicearg + [int(sys.argv[argidx])]
+            sa = slicearg + [int(args[argidx])]
             print '%s = %s' % (pars[iidx], data[pars[iidx]][sa[-1]])
             desc2 = desc + ' %s=%s ' % (pars[iidx], data[pars[iidx]][sa[-1]])
             pfx = postfix + '_%s%03d' % (pars[iidx], sa[-1])
             multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa, desc2,
-                    pfx)
+                    pfx, args)
     else:
         if iidx <= xidx:
             slicearg.append(slice(None))
@@ -151,8 +163,10 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, postf
             print 'min/max/nans?: ', np.nanmin(dplot[slicearg]), np.nanmax(dplot[slicearg]), np.any(np.isnan(dplot[slicearg]))
             make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc)
 
-            if len(sys.argv) > argidx:
-                savefig(sys.argv[argidx] + pfix + '.png', bbox_inches='tight')
+            global options
+
+            if len(args) > argidx:
+                savefig(args[argidx] + pfix + '.' + options.format, bbox_inches='tight')
             else:
                 ion()
                 show()
@@ -160,30 +174,38 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, postf
         # More than 1 value on the innermost axis?
         if data['main'].shape[-1] > 1:
             sorig = slicearg
-            if sys.argv[argidx] == '-':
+            if args[argidx] == '-':
                 argidx += 1
                 for i in range(data['main'].shape[-1]):
                     slicearg = sorig + [i]
                     do_plot(postfix + '_in%d' % i)
             else:
-                slicearg.append(int(sys.argv[argidx]))
+                slicearg.append(int(args[argidx]))
                 argidx += 1
                 do_plot(postfix)
         else:
             slicearg.append(0)
             do_plot(postfix)
 
+if options.format == 'pdf':
+    rc('savefig', dpi=300.0)
+    rc('figure', figsize=[options.figw, 0.75 * options.figw])
+    rc('text', usetex=True, fontsize=10)
+    rc('axes', labelsize=10)
+    rc('legend', fontsize=10)
+    rc('xtick', labelsize=8)
+    rc('ytick', labelsize=8)
 
 if __name__ == '__main__':
-    fname = sys.argv[1]
+    fname = args[0]
     data = np.load(fname)
     pars = list(data['par_multi']) + list(data['scan_vars'])
 
     print 'Parameters are (in order): ', pars
     print 'Shape: ', data['main'].shape
 
-    xvar = sys.argv[2]
-    yvar = sys.argv[3]
+    xvar = args[1]
+    yvar = args[2]
 
     idxs = set(range(len(pars)))
     xidx = pars.index(xvar)
@@ -191,9 +213,10 @@ if __name__ == '__main__':
     idxs.remove(xidx)
     idxs.remove(yidx)
 
-    argidx = 4
+    argidx = 3
     slicearg = []
     desc = ''
 
-    multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, '')
+    multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc, '',
+            args)
 
