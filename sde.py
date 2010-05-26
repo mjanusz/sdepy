@@ -4,6 +4,7 @@ import math
 import operator
 import os
 import pwd
+import re
 import signal
 import sys
 import time
@@ -14,6 +15,9 @@ from optparse import OptionGroup, OptionParser, OptionValueError, Values
 import numpy
 import sympy
 from sympy import Symbol
+from sympy.core import basic
+from sympy.printing.ccode import CCodePrinter
+from sympy.printing.precedence import precedence, PRECEDENCE
 
 import pycuda.autoinit
 import pycuda.driver as cuda
@@ -141,7 +145,7 @@ class SRK2(SolverGenerator):
 
         ctx = {}
         ctx['const_parameters'] = const_parameters
-        ctx['local_vars'] = local_vars
+        ctx['local_vars'] = dict([(k, KernelCodePrinter().doprint(v)) for k, v in local_vars.iteritems()])
         ctx['par_cuda'] = kernel_parameters
         ctx['rhs_vars'] = sde.num_vars
         ctx['noise_strength_map'] = sde.noise_map
@@ -156,6 +160,31 @@ class SRK2(SolverGenerator):
                                 (pwd.getpwuid(os.getuid())[0]))
         sde_template = lookup.get_template('sde.mako')
         return sde_template.render(**ctx)
+
+def int2float(t):
+    #return re.sub(r'([0-9]+)([^\.])', r'\1.0\2', str(t))
+    return str(t)
+
+class KernelCodePrinter(CCodePrinter):
+
+    def _print_Pow(self, expr):
+        PREC = precedence(expr)
+        if expr.exp is basic.S.NegativeOne:
+            return '1.0/%s' % (self.parenthesize(expr.base, PREC))
+        # For the kernel code, it's better to calculate the power
+        # here explicitly by multiplication.
+        elif expr.exp == 2:
+            return '%s*%s' % (self.parenthesize(expr.base, PREC),
+                              self.parenthesize(expr.base, PREC))
+        else:
+            return int2float('powf(%s,%s)' % (self.parenthesize(expr.base, PREC),
+                                              self.parenthesize(expr.exp, PREC)))
+
+    def _print_Function(self, expr):
+        if expr.func.__name__ == 'log':
+            return 'logf(%s)' % self.stringify(expr.args, ', ')
+        else:
+            return super(KernelCodePrinter, self)._print_Function(expr)
 
 class TextOutput(object):
     def __init__(self, sde, subfiles):
