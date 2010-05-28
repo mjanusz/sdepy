@@ -43,7 +43,18 @@ def drift_velocity(sde, *args):
         a = starting.astype(numpy.float64)
         b = final.astype(numpy.float64)
 
-        ret.append((numpy.average(b) - numpy.average(a)) /
+        ret.append((numpy.average(b-a)) /
+                (sde.sim_t - sde.start_t))
+
+    return ret
+
+def abs_drift_velocity(sde, *args):
+    ret = []
+    for starting, final in args:
+        a = starting.astype(numpy.float64)
+        b = final.astype(numpy.float64)
+
+        ret.append(numpy.average(numpy.abs(b - a)) /
                 (sde.sim_t - sde.start_t))
 
     return ret

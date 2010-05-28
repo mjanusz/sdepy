@@ -39,6 +39,7 @@ output = {'path': {
             },
           'summary': {
             'main': [sde.OutputDecl(func=sde.drift_velocity, vars=[0])],
+#            'abs': [sde.OutputDecl(func=sde.abs_drift_velocity, vars=[0])],
             }
         }
 
