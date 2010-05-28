@@ -30,6 +30,7 @@ parser = OptionParser()
 parser.add_option('--format', dest='format', type='choice',
         choices=['png', 'pdf'], default='png')
 parser.add_option('--figw', dest='figw', type='float', default=8.0)
+parser.add_option('--abs', dest='abs', action='store_true', default=False)
 options, args = parser.parse_args()
 
 var_disp = {
@@ -38,6 +39,8 @@ var_disp = {
     'omega': r'$\omega$',
     'amp': r'$a$',
     'gam': r'$\gamma$',
+    'gam1': r'$\gamma_1$',
+    'gam2': r'$\gamma_2$',
 }
 
 def var_display(name):
@@ -160,7 +163,13 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
             slicearg.append(slice(None))
 
         def do_plot(pfix):
-            dplot = data['main']
+            global options
+            if options.abs:
+                dplot = data['abs']
+                dplot[np.isnan(dplot)] = 0.0
+            else:
+                dplot = data['main']
+
             if xidx < yidx:
                 dplot = np.swapaxes(dplot, xidx, yidx)
 
