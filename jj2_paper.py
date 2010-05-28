@@ -9,10 +9,7 @@ import sympy
 import sys
 
 def init_vector(sdei, i):
-    if i == 0:
-        return numpy.random.uniform(0.0, 2.0 * numpy.pi, sdei.num_threads)
-    else:
-        return numpy.random.uniform(0.0, 2.0 * numpy.pi, sdei.num_threads)
+    return numpy.random.uniform(0.0, 2.0 * numpy.pi, sdei.num_threads)
 
 sim_params = {'i1': 'constant force on the 1st particle',
               'i2': 'constant force on the 2nd particle',
