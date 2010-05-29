@@ -152,16 +152,13 @@ class SRK2(SolverGenerator):
 
     @classmethod
     def get_source(cls, sde, const_parameters, kernel_parameters, local_vars):
-        num_noises = sde.num_noises + sde.num_noises % 2
-
         ctx = {}
         ctx['const_parameters'] = const_parameters
         ctx['local_vars'] = dict([(k, KernelCodePrinter().doprint(v)) for k, v in local_vars.iteritems()])
         ctx['par_cuda'] = kernel_parameters
         ctx['rhs_vars'] = sde.num_vars
         ctx['noise_strength_map'] = sde.noise_map
-        ctx['noises'] = sde.num_noises
-        ctx['num_noises'] = num_noises
+        ctx['num_noises'] = sde.num_noises
         ctx['sde_code'] = sde.code
         ctx['rng_state_size'] = RNG_STATE[sde.options.rng]
         ctx['rng'] = sde.options.rng

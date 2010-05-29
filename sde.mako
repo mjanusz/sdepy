@@ -1,4 +1,7 @@
 <%include file="rng.mako"/>
+<%
+	import math
+%>
 
 // Constants
 %for param in const_parameters:
@@ -36,10 +39,23 @@ __device__ inline void RHS(
 <%def name="SRK2()">
 	for (i = 1; i <= samples; i++) {
 		## RNG call.
-		%for i in range(0, num_noises/2):
-			n${2*i} = ${rng_uni()};
-			n${2*i+1} = ${rng_uni()};
-			bm_trans(n${2*i}, n${2*i+1});
+		%for i in range(0, int(math.ceil(num_noises/2.0))):
+			## If need an odd number of normal variates, then
+			## every other iteration we can simply reuse one
+			## variate from the previous one.
+			%if num_noises % 2 and i == num_noises / 2:
+				if (!(i & 1)) {
+					n${2*i} = n${2*i+1};
+				} else {
+					n${2*i} = ${rng_uni()};
+					n${2*i+1} = ${rng_uni()};
+					bm_trans(n${2*i}, n${2*i+1});
+				}
+			%else:
+				n${2*i} = ${rng_uni()};
+				n${2*i+1} = ${rng_uni()};
+				bm_trans(n${2*i}, n${2*i+1});
+			%endif
 		%endfor
 
 		## First call to RHS.
@@ -78,28 +94,13 @@ __device__ inline void RHS(
 			t
 		);
 
-		## RNG call.
-		%for i in range(0, noises/2):
-			n${2*i} = ${rng_uni()};
-			n${2*i+1} = ${rng_uni()};
-			bm_trans(n${2*i}, n${2*i+1});
-		%endfor
-
 		## Propagation.
 		%for i in range(0, rhs_vars):
 			x${i} += 0.5f*dt * (xt${i} + xtt${i})
 			%if i in noise_strength_map:
 				%for j, n in enumerate(noise_strength_map[i]):
-					%if j == noises-1 and noises % 2:
-						## Reuse a noise already calculated during the
-						## first set of calls to bm_trans.
-						%if n != 0.0:
-							+ ${n}*n${j+1}
-						%endif
-					%else:
-						%if n != 0.0:
-							+ ${n}*n${j}
-						%endif
+					%if n != 0.0:
+						+ ${n}*n${j}
 					%endif
 				%endfor
 			%endif
@@ -132,7 +133,7 @@ __global__ void AdvanceSim(unsigned int *rng_state,
 	%for param in par_cuda:
 		${param},
 	%endfor
-	%for i in range(0, num_noises):
+	%for i in range(0, num_noises + num_noises % 2):
 		n${i},
 	%endfor
 	t;
