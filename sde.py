@@ -43,7 +43,7 @@ def drift_velocity(sde, *args):
         a = starting.astype(numpy.float64)
         b = final.astype(numpy.float64)
 
-        ret.append((numpy.average(b-a)) /
+        ret.append((numpy.average(b) - numpy.average(a)) /
                 (sde.sim_t - sde.start_t))
 
     return ret
@@ -844,7 +844,10 @@ class SDE(object):
         # Actually run the simulation here.
         for j in xrange(init_iter, self.max_sim_iter):
             self.sim_t = self.iter_to_sim_time(j)
-            args = kernel_args + [numpy.float32(self.sim_t)]
+            # Fold the time variable passed to the kernel.
+            # NOTE: Here we implicitly assume that only the reduced value of
+            # time matters for the evolution of the system.
+            args = kernel_args + [numpy.float32(self.sim_t % period)]
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
             self.sim_t += self.options.samples * self.dt
 
@@ -853,8 +856,9 @@ class SDE(object):
                 want_save = True
                 self.last_save = time.time()
 
+            fold_variables(j, True)
+
             if pathwise:
-                fold_variables(j, True)
                 self.output_current()
                 if self.scan_vars:
                     self.output.finish_block()
@@ -864,7 +868,6 @@ class SDE(object):
                 transient = False
                 self.start_t = self.sim_t
                 self.vec_start_nx = self.vec_nx.copy()
-                fold_variables(j, True)
 
             if (want_dump or
                     (self.options.dump_every > 0 and
