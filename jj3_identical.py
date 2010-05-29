@@ -23,7 +23,7 @@ sim_params = {'i1': 'constant force on the 1st particle',
 
 # TODO: Fix this.
 local_vars = {
-        'ns0': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt),
+        'ns0': lambda sdei: sympy.sqrt(sdei.S.dt),
         }
 
 code = """
