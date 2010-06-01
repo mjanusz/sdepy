@@ -715,7 +715,7 @@ class SDE(object):
         ddata = pycuda.tools.DeviceData()
         occ = pycuda.tools.OccupancyRecord(ddata, block_size, kern.shared_size_bytes, kern.num_regs)
 
-        print 'CUDA stats l:%d  s:%d  r:%d  occ:(%f tb:%d w:%d l:%s)' % (kern.local_size_bytes, kern.shared_size_bytes,
+        print '# CUDA stats l:%d  s:%d  r:%d  occ:(%f tb:%d w:%d l:%s)' % (kern.local_size_bytes, kern.shared_size_bytes,
                     kern.num_regs, occ.occupancy, occ.tb_per_mp, occ.warps_per_mp, occ.limited_by)
 
         self._scan_iter = 0
@@ -850,7 +850,7 @@ class SDE(object):
             # Fold the time variable passed to the kernel.
             # NOTE: Here we implicitly assume that only the reduced value of
             # time matters for the evolution of the system.
-            args = kernel_args + [self.float(self.sim_t % period)]
+            args = kernel_args + [self.float(math.fmod(self.sim_t, period))]
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
             self.sim_t += self.options.samples * self.dt
 
