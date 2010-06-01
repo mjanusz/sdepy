@@ -9,7 +9,7 @@
 %endfor
 
 __constant__ float dt = 0.0f;
-__constant__ int samples = 0;
+__constant__ unsigned int samples = 0;
 
 <%def name="rng_uni()">
 	rng_${rng}(

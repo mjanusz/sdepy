@@ -99,7 +99,13 @@ def _sighandler(signum, frame):
 
 def _convert_to_double(src):
     import re
-    s = src.replace('float', 'double')
+    s = re.sub(r'float([^\.])', r'double\1', src)
+    s = s.replace('logf(', 'log(')
+    s = s.replace('expf(', 'exp(')
+    s = s.replace('powf(', 'pow(')
+    s = s.replace('sqrtf(', 'sqrt(')
+    s = s.replace('cosf(', 'cos(')
+    s = s.replace('sinf(', 'sin(')
     s = s.replace('FLT_EPSILON', 'DBL_EPSILON')
     return re.sub('([0-9]+\.[0-9]*)f', '\\1', s)
 
@@ -844,7 +850,7 @@ class SDE(object):
             # Fold the time variable passed to the kernel.
             # NOTE: Here we implicitly assume that only the reduced value of
             # time matters for the evolution of the system.
-            args = kernel_args + [numpy.float32(self.sim_t % period)]
+            args = kernel_args + [self.float(self.sim_t % period)]
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
             self.sim_t += self.options.samples * self.dt
 
