@@ -847,6 +847,14 @@ class SDE(object):
         # Actually run the simulation here.
         for j in xrange(init_iter, self.max_sim_iter):
             self.sim_t = self.iter_to_sim_time(j)
+
+            if transient and self.sim_t >= self.options.transients * period:
+                for i in range(0, self.num_vars):
+                    cuda.memcpy_dtoh(self.vec_start[i], self._gpu_vec[i])
+                transient = False
+                self.start_t = self.sim_t
+                self.vec_start_nx = self.vec_nx.copy()
+
             # Fold the time variable passed to the kernel.
             # NOTE: Here we implicitly assume that only the reduced value of
             # time matters for the evolution of the system.
@@ -865,12 +873,6 @@ class SDE(object):
                 self.output_current()
                 if self.scan_vars:
                     self.output.finish_block()
-            elif transient and self.sim_t >= self.options.transients * period:
-                for i in range(0, self.num_vars):
-                    cuda.memcpy_dtoh(self.vec_start[i], self._gpu_vec[i])
-                transient = False
-                self.start_t = self.sim_t
-                self.vec_start_nx = self.vec_nx.copy()
 
             if (want_dump or
                     (self.options.dump_every > 0 and
