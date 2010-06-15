@@ -26,13 +26,6 @@ from optparse import OptionGroup, OptionParser, OptionValueError
 
 from pylab import *
 
-parser = OptionParser()
-parser.add_option('--format', dest='format', type='choice',
-        choices=['png', 'pdf'], default='png')
-parser.add_option('--figw', dest='figw', type='float', default=8.0)
-parser.add_option('--abs', dest='abs', action='store_true', default=False)
-options, args = parser.parse_args()
-
 var_disp = {
     'a1': r'$a_1$',
     'a2': r'$a_2$',
@@ -51,12 +44,7 @@ def var_display(name):
     else:
         return name
 
-def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
-    global options
-
-    a = abs(min(np.nanmin(dplot[slicearg]), 0.0))
-    b = abs(np.nanmax(dplot[slicearg]))
-
+def make_subplot(options, ax, dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, a, b):
     sc = a / (a+b) / 0.5
     sc2 = b / (a+b) / 0.5
 
@@ -100,28 +88,40 @@ def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
     plt.register_cmap(cmap=anm_cmap)
 
     aspect = ((data[pars[xidx]][-1] - data[pars[xidx]][0]) /
-              (data[pars[yidx]][-1] - data[pars[yidx]][0])) / 1.5
+              (data[pars[yidx]][-1] - data[pars[yidx]][0])) / options.inset_aspect
 
-    cla()
-    clf()
-    axes([0.1,-0.05,0.95,1.0])
-    imshow(dplot[slicearg],
+    im = ax.imshow(dplot[slicearg],
            extent=(data[pars[xidx]][0], data[pars[xidx]][-1],
                    data[pars[yidx]][0], data[pars[yidx]][-1]),
            aspect=aspect,
            interpolation='bilinear',
-#       interpolation='nearest',
+#           interpolation='nearest',
+           vmin = -a,
+           vmax = b,
            cmap = anm_cmap,
            origin='lower')
+
+    return im
+
+def make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc):
+    global options
+
+    a = abs(min(np.nanmin(dplot[slicearg]), 0.0))
+    b = abs(np.nanmax(dplot[slicearg]))
+
+    cla()
+    clf()
+    axes([0.1,-0.05,0.95,1.0])
+    im = make_subplot(options, gca(), dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, a, b)
     ylabel(var_display(yvar))
     xlabel(var_display(xvar))
 
     if options.format != 'pdf':
         title(desc)
-    colorbar(shrink=0.75)
+    colorbar(im, shrink=0.75)
 
 def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
-        postfix, args):
+        postfix, args, pretend=False):
     # Scan the command line arguments for info about
     # which values to use for the remaining parameters.
     iidx = argidx - 3
@@ -147,14 +147,14 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
                 print '%s = %s' % (pars[iidx], data[pars[iidx]][sa[-1]])
                 desc2 = desc + ' %s=%s ' % (pars[iidx], data[pars[iidx]][sa[-1]])
                 pfx = postfix + '_%s%03d' % (pars[iidx], sa[-1])
-                multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa,
+                return multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa,
                         desc2, pfx, args)
         else:
             sa = slicearg + [int(args[argidx])]
             print '%s = %s' % (pars[iidx], data[pars[iidx]][sa[-1]])
             desc2 = desc + ' %s=%s ' % (pars[iidx], data[pars[iidx]][sa[-1]])
             pfx = postfix + '_%s%03d' % (pars[iidx], sa[-1])
-            multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa, desc2,
+            return multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa, desc2,
                     pfx, args)
     else:
         if iidx <= xidx:
@@ -174,7 +174,11 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
                 dplot = np.swapaxes(dplot, xidx, yidx)
 
             print 'min/max/nans?: ', np.nanmin(dplot[slicearg]), np.nanmax(dplot[slicearg]), np.any(np.isnan(dplot[slicearg]))
-            make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc)
+            if pretend:
+                return (argidx, (dplot, slicearg, data, pars, xvar, yvar, xidx,
+                    yidx))
+            else:
+                make_plot(dplot, slicearg, data, pars, xvar, yvar, xidx, yidx, desc)
 
             global options
 
@@ -195,21 +199,40 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
             else:
                 slicearg.append(int(args[argidx]))
                 argidx += 1
-                do_plot(postfix)
+                return do_plot(postfix)
         else:
             slicearg.append(0)
-            do_plot(postfix)
+            return do_plot(postfix)
 
-if options.format == 'pdf':
-    rc('savefig', dpi=300.0)
-    rc('figure', figsize=[options.figw, 0.75 * options.figw])
-    rc('text', usetex=True, fontsize=10)
-    rc('axes', labelsize=10)
-    rc('legend', fontsize=10)
-    rc('xtick', labelsize=8)
-    rc('ytick', labelsize=8)
+def parse_opts():
+    global options
+    parser = OptionParser()
+    parser.add_option('--format', dest='format', type='choice',
+            choices=['png', 'pdf'], default='png')
+    parser.add_option('--figw', dest='figw', type='float', default=8.0)
+    parser.add_option('--abs', dest='abs', action='store_true', default=False)
+    parser.add_option('--output', dest='output', type='string', default='out')
+    parser.add_option('--fig_aspect', dest='figaspect', type='float',
+            default=0.75)
+    parser.add_option('--inset_aspect', dest='inset_aspect', type='float',
+            default=1.5)
+
+    options, args = parser.parse_args()
+
+    if options.format == 'pdf':
+        rc('savefig', dpi=300.0)
+        rc('figure', figsize=[options.figw, options.figaspect * options.figw])
+        rc('text', usetex=True, fontsize=10)
+        rc('axes', labelsize=10)
+        rc('legend', fontsize=10)
+        rc('xtick', labelsize=8)
+        rc('ytick', labelsize=8)
+
+    return options, args
+
 
 if __name__ == '__main__':
+    options, args = parse_opts()
     fname = args[0]
     data = np.load(fname)
     pars = list(data['par_multi']) + list(data['scan_vars'])
