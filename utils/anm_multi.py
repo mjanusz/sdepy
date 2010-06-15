@@ -18,9 +18,10 @@ space = 0.01
 cbar_fraction = 0.04
 effective_w = 1.0 - cbar_fraction - space
 
-# The inset apsect if the controlling variable and the total figure apsect is
+# The panel aspect if the controlling variable and the total figure apsect is
 # automatically adjusted.
-options.fig_aspect = effective_w * (1.0/options.inset_aspect)
+options.figaspect = effective_w * (1.0/options.panel_aspect)
+anm_plot.set_opts()
 
 fig = figure()
 cax = fig.add_axes([1.0 - cbar_fraction, 0.0, cbar_fraction, 1.0])
@@ -29,11 +30,7 @@ w = effective_w/2.0 - space/2.0
 h = 0.5 - space/2.0
 
 axs = []
-
-a = 999999
-b = -999999
 anm_args = []
-
 labels = ['$(a)$', '$(b)$', '$(c)$', '$(d)$']
 i = 0
 
@@ -51,6 +48,8 @@ for y in reversed(range(nc)):
         a.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(prune='both'))
         axs.append(a)
         i += 1
+a = -999999
+b = -999999
 
 for ax in axs:
     fname = args[0]
@@ -77,7 +76,7 @@ for ax in axs:
     anm_args.append(anm_plot_args)
     (dplot, slicearg, data, pars, xvar, yvar, xidx, yidx) = anm_plot_args
 
-    a = min(a, abs(min(np.nanmin(dplot[slicearg]), 0.0)))
+    a = max(a, abs(min(np.nanmin(dplot[slicearg]), 0.0)))
     b = max(b, abs(np.nanmax(dplot[slicearg])))
 
     args = args[i:]
