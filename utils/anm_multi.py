@@ -27,6 +27,9 @@ a = 999999
 b = -999999
 anm_args = []
 
+labels = ['$(a)$', '$(b)$', '$(c)$', '$(d)$']
+i = 0
+
 for y in reversed(range(nc)):
     for x in range(nr):
         pos = [x*(0.95/2.0 + space/2.0), y*(0.5 + space/2.0), w, h]
@@ -36,9 +39,11 @@ for y in reversed(range(nc)):
         if x > 0:
             a.set_yticklabels([])
 
+        t = fig.text(pos[0] + 0.05, pos[1] + h - 0.075, labels[i], horizontalalignment='left') #fontproperties=FontProperties(size=16))
         a.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(prune='both'))
         a.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(prune='both'))
         axs.append(a)
+        i += 1
 
 for ax in axs:
     fname = args[0]
