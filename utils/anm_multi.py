@@ -13,12 +13,19 @@ nc = 2
 
 options, args = anm_plot.parse_opts()
 
-fig = figure()
-cax = fig.add_axes([0.96, 0.0, 0.04, 1.0])
-
+# Spacing and size of the colorbar as fractions of the figure size.
 space = 0.01
+cbar_fraction = 0.04
+effective_w = 1.0 - cbar_fraction - space
 
-w = 0.95/2.0 - space/2.0
+# The inset apsect if the controlling variable and the total figure apsect is
+# automatically adjusted.
+options.fig_aspect = effective_w * (1.0/options.inset_aspect)
+
+fig = figure()
+cax = fig.add_axes([1.0 - cbar_fraction, 0.0, cbar_fraction, 1.0])
+
+w = effective_w/2.0 - space/2.0
 h = 0.5 - space/2.0
 
 axs = []
@@ -32,7 +39,7 @@ i = 0
 
 for y in reversed(range(nc)):
     for x in range(nr):
-        pos = [x*(0.95/2.0 + space/2.0), y*(0.5 + space/2.0), w, h]
+        pos = [x*(effective_w/2.0 + space/2.0), y*(0.5 + space/2.0), w, h]
         a = fig.add_axes(pos)
         if y > 0:
             a.set_xticklabels([])
