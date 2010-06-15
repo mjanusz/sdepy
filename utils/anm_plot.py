@@ -88,7 +88,7 @@ def make_subplot(options, ax, dplot, slicearg, data, pars, xvar, yvar, xidx, yid
     plt.register_cmap(cmap=anm_cmap)
 
     aspect = ((data[pars[xidx]][-1] - data[pars[xidx]][0]) /
-              (data[pars[yidx]][-1] - data[pars[yidx]][0])) / options.inset_aspect
+              (data[pars[yidx]][-1] - data[pars[yidx]][0])) / options.panel_aspect
 
     im = ax.imshow(dplot[slicearg],
            extent=(data[pars[xidx]][0], data[pars[xidx]][-1],
@@ -162,9 +162,20 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
         if iidx <= yidx:
             slicearg.append(slice(None))
 
-        def do_plot(pfix):
+        def do_plot(pfi, args, argidx):
             global options
-            if options.abs:
+
+            is_abs = options.abs
+
+            try:
+                if args[argidx] == 'abs':
+                    argidx += 1
+                    is_abs = True
+
+            except IndexError:
+                pass
+
+            if is_abs:
                 dplot = data['abs']
                 dplot[np.isnan(dplot)] = 0.0
             else:
@@ -195,14 +206,14 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
                 argidx += 1
                 for i in range(data['main'].shape[-1]):
                     slicearg = sorig + [i]
-                    do_plot(postfix + '_in%d' % i)
+                    do_plot(postfix + '_in%d' % i, args, argidx)
             else:
                 slicearg.append(int(args[argidx]))
                 argidx += 1
-                return do_plot(postfix)
+                return do_plot(postfix, args, argidx)
         else:
             slicearg.append(0)
-            return do_plot(postfix)
+            return do_plot(postfix, args, argidx)
 
 def parse_opts():
     global options
@@ -214,11 +225,16 @@ def parse_opts():
     parser.add_option('--output', dest='output', type='string', default='out')
     parser.add_option('--fig_aspect', dest='figaspect', type='float',
             default=0.75)
-    parser.add_option('--inset_aspect', dest='inset_aspect', type='float',
+    parser.add_option('--panel_aspect', dest='panel_aspect', type='float',
             default=1.5)
+    parser.add_option('--panels', dest='panels', type='int', default=1)
 
     options, args = parser.parse_args()
 
+    return options, args
+
+def set_opts():
+    global options
     if options.format == 'pdf':
         rc('savefig', dpi=300.0)
         rc('figure', figsize=[options.figw, options.figaspect * options.figw])
@@ -228,11 +244,9 @@ def parse_opts():
         rc('xtick', labelsize=8)
         rc('ytick', labelsize=8)
 
-    return options, args
-
-
 if __name__ == '__main__':
     options, args = parse_opts()
+    set_opts()
     fname = args[0]
     data = np.load(fname)
     pars = list(data['par_multi']) + list(data['scan_vars'])
