@@ -304,6 +304,44 @@ class NpyOutput(object):
         numpy.savez(self.sde.options.output, cmdline=self.cmdline, scan_vars=self.scan_vars,
                     par_multi=self.par_multi_ordered, options=self.sde.options, **out)
 
+class StoreOutput(object):
+    def __init__(self, sde, subfiles):
+        self.sde = sde
+        self.subfiles = subfiles
+        self.cache = {}
+
+    def finish_block(self):
+        pass
+
+    def data(self, **kwargs):
+        for name, val in kwargs.iteritems():
+            self.cache.setdefault(name, []).append(val)
+
+    def header(self):
+        self.scan_vars = self.sde.scan_vars
+        self.par_multi_ordered = self.sde.par_multi_ordered
+
+    def close(self):
+        out = {}
+        shape = []
+
+        for par in self.par_multi_ordered:
+            out[par] = getattr(self.sde.options, par)
+            shape.append(len(out[par]))
+
+        for sv in self.scan_vars:
+            out[sv] = getattr(self.sde.options, sv)
+            shape.append(len(out[sv]))
+
+        for name, val in self.cache.iteritems():
+            inner_len = max(len(x) for x in val)
+            out[name] = numpy.array(val, dtype=self.sde.float)
+
+            if shape and reduce(operator.mul, shape) * inner_len == reduce(operator.mul, out[name].shape):
+                out[name] = numpy.reshape(out[name], shape + [inner_len])
+
+        self.out = out
+
 class S(object):
     def __init__(self):
         self.dt = Symbol('dt')
@@ -367,7 +405,7 @@ class SDE(object):
         group = OptionGroup(self.parser, 'Output settings')
         group.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
         group.add_option('--output_format', dest='oformat', help='output file format', type='choice',
-                choices=['npy', 'text'], action='store', default='npy')
+                choices=['npy', 'text', 'store'], action='store', default='npy')
         group.add_option('--output', dest='output', help='base output filename', type='string', action='store', default=None)
         group.add_option('--save_every', dest='save_every', help='save output every N seconds', type='int',
                 action='store', default=0)
@@ -696,8 +734,10 @@ class SDE(object):
 
         if self.options.oformat == 'text':
             self.output = TextOutput(self, self.req_output.keys())
-        else:
+        elif self.options.oformat == 'npy':
             self.output = NpyOutput(self, self.req_output.keys())
+        elif self.options.oformat == 'store':
+            self.output = StoreOutput(self, self.req_output.keys())
 
         self.output.header()
 
