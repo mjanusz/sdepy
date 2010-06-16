@@ -1,19 +1,21 @@
 #!/usr/bin/python
-#
-# 1) Single Josephson junction driven by a DC and AC current, with noise.
-# 2) Underdamped Brownian particle in a spatially periodic, oscillating,
-#    titled washboard potential.
-import math
-import numpy
-import sde
+
+import scipy as sp
+import numpy as np
+import matplotlib
+matplotlib.use('GTKAgg')
+
+from scipy.integrate import odeint, ode
+from pylab import *
+
 import sympy
-import sys
+import sde
 
 def init_vector(sdei, i):
     if i == 0:
-        return numpy.random.uniform(0.0, 2.0 * math.pi, sdei.num_threads)
+        return np.random.uniform(0.0, 2.0 * math.pi, sdei.num_threads)
     else:
-        return numpy.random.uniform(-2.0, 2.0, sdei.num_threads)
+        return np.random.uniform(-2.0, 2.0, sdei.num_threads)
 
 sim_params = {'force': 'DC bias current',
               'gam': 'damping constant',
@@ -35,7 +37,7 @@ sdei = sde.SDE(code, sim_params, num_vars=2, num_noises=1, noise_map=ns_map, per
                local_vars=local_vars)
 
 output = {'path': {
-            'main': [sde.OutputDecl(func=sde.avg_moments, vars=[0])],
+            'main': [sde.OutputDecl(func=sde.avg_moments, vars=[0,1])],
             },
           'summary': {
             'main': [sde.OutputDecl(func=sde.drift_velocity, vars=[0])],
@@ -46,5 +48,7 @@ output = {'path': {
 sdei.prepare(sde.SRK2, init_vector, freq_var='omega')
 sdei.simulate(output)
 
-
-
+a = sdei.output.out['main']
+plot(np.mod(a[:,1], 2 *pi), a[:,3], '.', ms=0.5)
+#plot(a[:,0], a[:,1])
+show()

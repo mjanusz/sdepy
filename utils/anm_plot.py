@@ -148,14 +148,14 @@ def multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx, slicearg, desc,
                 desc2 = desc + ' %s=%s ' % (pars[iidx], data[pars[iidx]][sa[-1]])
                 pfx = postfix + '_%s%03d' % (pars[iidx], sa[-1])
                 return multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa,
-                        desc2, pfx, args)
+                        desc2, pfx, args, pretend=pretend)
         else:
             sa = slicearg + [int(args[argidx])]
             print '%s = %s' % (pars[iidx], data[pars[iidx]][sa[-1]])
             desc2 = desc + ' %s=%s ' % (pars[iidx], data[pars[iidx]][sa[-1]])
             pfx = postfix + '_%s%03d' % (pars[iidx], sa[-1])
             return multi_plot(data, pars, xvar, yvar, xidx, yidx, argidx+1, sa, desc2,
-                    pfx, args)
+                    pfx, args, pretend=pretend)
     else:
         if iidx <= xidx:
             slicearg.append(slice(None))
