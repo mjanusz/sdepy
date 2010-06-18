@@ -251,7 +251,7 @@ class TextOutput(object):
             print >>out, '# %s = %s' % (par, ' '.join(str(x) for x in self.sde.options.__dict__[par]))
         for par in self.sde.scan_vars:
             print >>out, '# %s = %s' % (par, ' '.join(str(x) for x in self.sde.options.__dict__[par]))
- 
+
     def close(self):
         pass
 
@@ -353,7 +353,8 @@ class SDE(object):
     format_cmd = r"indent -linux -sob -l120 {file} ; sed -i -e '/^$/{{N; s/\n\([\t ]*}}\)$/\1/}}' -e '/{{$/{{N; s/{{\n$/{{/}}' {file}"
 
     def __init__(self, code, params, num_vars, num_noises,
-            noise_map, period_map=None, args=None, local_vars=None):
+            noise_map, period_map=None, args=None, local_vars=None,
+            const_pars={}):
         """
         :param code: the code defining the Stochastic Differential Equation
         :param params: dict of simulation parameters; keys are parameter names,
@@ -431,6 +432,7 @@ class SDE(object):
         self.num_vars = num_vars
         self.num_noises = num_noises
         self.noise_map = noise_map
+        self.ext_pars_gen = const_pars
 
         if period_map is None:
             self.period_map = {}
@@ -583,7 +585,7 @@ class SDE(object):
                 kernel_source = file.read()
         else:
             kernel_source = algorithm.get_source(self, userdef_global_vars,
-                   self.scan_vars, self.local_vars)
+                   self.scan_vars + list(sorted(self.ext_pars_gen.keys())), self.local_vars)
 
             if self.options.precision == 'double':
                 kernel_source = _convert_to_double(kernel_source)
@@ -670,6 +672,8 @@ class SDE(object):
 
     def _sim_prep_var(self):
         self.vec = []
+        self.ext_pars = []
+        self._gpu_ext_pars = []
         self._gpu_vec = []
 
         # Prepare device vectors.
@@ -677,6 +681,11 @@ class SDE(object):
             vt = numpy.zeros(self.num_threads).astype(self.float)
             self.vec.append(vt)
             self._gpu_vec.append(cuda.mem_alloc(vt.nbytes))
+
+        for par_name, par_gen in sorted(self.ext_pars_gen.iteritems()):
+            vt = numpy.zeros(self.num_threads).astype(self.float)
+            self.ext_pars.append(vt)
+            self._gpu_ext_pars.append(cuda.mem_alloc(vt.nbytes))
 
         self._sv = []
         self._gpu_sv = []
@@ -697,6 +706,8 @@ class SDE(object):
         for sv in self._sv:
             self._gpu_sv.append(cuda.mem_alloc(sv.nbytes))
             cuda.memcpy_htod(self._gpu_sv[-1], sv)
+
+
 
     def get_var(self, i, starting=False):
         if starting:
@@ -748,7 +759,8 @@ class SDE(object):
                 self.req_vars |= set(vars)
 
         self.block_size = block_size
-        arg_types = ['P'] + ['P']*self.num_vars + ['P'] * len(self.scan_vars) + [self.float]
+        arg_types = ['P'] + ['P']*self.num_vars + ['P'] * (len(self.scan_vars) +
+                len(self.ext_pars_gen.keys())) + [self.float]
         self.advance_sim.prepare(arg_types, block=(block_size, 1, 1))
 
         kern = self.advance_sim
@@ -820,7 +832,7 @@ class SDE(object):
                 self._run_nested(range_pars[1:])
 
     def _run_kernel(self, period):
-        kernel_args = [self._gpu_rng_state] + self._gpu_vec + self._gpu_sv
+        kernel_args = [self._gpu_rng_state] + self._gpu_vec + self._gpu_sv + self._gpu_ext_pars
 
         # Prepare an array for initial value of the variables (after
         # transients).
@@ -856,6 +868,16 @@ class SDE(object):
                 vt = self.init_vectors(self, i).astype(self.float)
                 self.vec.append(vt)
                 cuda.memcpy_htod(self._gpu_vec[i], vt)
+
+            i = 0
+            self.ext_pars = []
+            # FIXME: Handle this properly in the case of a resumed simulation.
+            # Generate the values of the external parameters.
+            for par_name, par_gen in sorted(self.ext_pars_gen.iteritems()):
+                vt = par_gen(self).astype(self.float)
+                self.ext_pars.append(vt)
+                cuda.memcpy_htod(self._gpu_ext_pars[i], vt)
+                i += 1
 
             # Prepare an array for number of periods for periodic variables.
             self.vec_nx = {}
