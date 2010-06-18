@@ -20,7 +20,7 @@ sim_params = {'i1': 'constant force on the 1st particle',
               'omega': 'AC drive frequency'}
 
 local_vars = {
-        'ns0': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * (1.0 / sdei.S.alpha - sdei.S.alpha)),
+        'ns0': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt),
         }
 
 code = """
