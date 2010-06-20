@@ -34,6 +34,7 @@ var_disp = {
     'gam': r'$\gamma$',
     'gam1': r'$\gamma_1$',
     'gam2': r'$\gamma_2$',
+    'b': r'$b$',
 }
 
 def var_display(name):
