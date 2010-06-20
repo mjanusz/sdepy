@@ -32,7 +32,7 @@ local_vars = {
 
 code = """
     dx0 = i1 - ic1 * sinf(x0) + alpha * (i2 - (2.0f - ic1) * sinf(x1)) + b * sinf(omega * t + phi0);
-    dx1 = alpha * (beta * (i2 - (2.0f - ic1) * sinf(x1)) + (i1 - sinf(x0))) + b * sinf(omega * t + phi0);
+    dx1 = alpha * (beta * (i2 - (2.0f - ic1) * sinf(x1)) + (i1 - ic1 * sinf(x0))) + b * sinf(omega * t + phi0);
 """
 
 ns_map = {0: ['ns0', 0], 1: [0, 'ns1']}
