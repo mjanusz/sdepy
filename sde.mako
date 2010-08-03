@@ -36,11 +36,128 @@ __device__ inline void RHS(
 	${sde_code}
 }
 
-<%def name="SRK2()">
+<%def name="Euler()">
 	for (i = 1; i <= samples; i++) {
 		## RNG call.
 		%for i in range(0, int(math.ceil(num_noises/2.0))):
 			## If need an odd number of normal variates, then
+			## every other iteration we can simply reuse one
+			## variate from the previous one.
+			%if num_noises % 2 and i == num_noises / 2:
+				if (!(i & 1)) {
+					n${2*i} = n${2*i+1};
+				} else {
+					n${2*i} = ${rng_uni()};
+					n${2*i+1} = ${rng_uni()};
+					bm_trans(n${2*i}, n${2*i+1});
+				}
+			%else:
+				n${2*i} = ${rng_uni()};
+				n${2*i+1} = ${rng_uni()};
+				bm_trans(n${2*i}, n${2*i+1});
+			%endif
+		%endfor
+
+		RHS(
+			%for i in range(0, rhs_vars):
+				xt${i}, x${i},
+			%endfor
+			%for param in par_cuda:
+				${param},
+			%endfor
+			t
+		);
+
+		## Propagation.
+		%for i in range(0, rhs_vars):
+			x${i} = x${i} + xt${i} * dt
+			%if i in noise_strength_map:
+				%for j, n in enumerate(noise_strength_map[i]):
+					%if n != 0.0:
+						+ ${n}*n${j};
+					%endif
+				%endfor
+			%endif
+			;
+		%endfor
+		t = ct + i*dt;
+	}
+</%def>
+
+<%def name="Milstein()">
+	for (i = 1; i <= samples; i++) {
+		## RNG call.
+		%for i in range(0, int(math.ceil(num_noises/2.0))):
+			## If need an odd number of normal variates, then
+			## every other iteration we can simply reuse one
+			## variate from the previous one.
+			%if num_noises % 2 and i == num_noises / 2:
+				if (!(i & 1)) {
+					n${2*i} = n${2*i+1};
+				} else {
+					n${2*i} = ${rng_uni()};
+					n${2*i+1} = ${rng_uni()};
+					bm_trans(n${2*i}, n${2*i+1});
+				}
+			%else:
+				n${2*i} = ${rng_uni()};
+				n${2*i+1} = ${rng_uni()};
+				bm_trans(n${2*i}, n${2*i+1});
+			%endif
+		%endfor
+
+		RHS(
+			%for i in range(0, rhs_vars):
+				xt${i}, x${i},
+			%endfor
+			%for param in par_cuda:
+				${param},
+			%endfor
+			t
+		);
+
+		%for i in range(0, rhs_vars):
+			%if i in noise_strength_map:
+				%for j, noise in enumerate(noise_strength_map[i]):
+					float ${noise} = ${local_vars[noise]};
+					%if ('d%s' % noise) not in local_vars:
+						%if ('d%s' % noise) not in const_parameters:
+							<%
+								raise ValueError('Noise strength derivative d%s needs to be defined.' % noise)
+							%>
+						%endif
+					%else:
+						float d${noise} = ${local_vars['d%s' % noise]};
+					%endif
+				%endfor
+			%endif
+		%endfor
+
+		## Propagation.
+		%for i in range(0, rhs_vars):
+			x${i} = x${i} + xt${i} * dt
+			%if i in noise_strength_map:
+				%for j, n in enumerate(noise_strength_map[i]):
+					%if n != 0.0:
+						+ ${n}*n${j} + 0.5f * ${n} * d${n} * (n${j}*n${j} - dt)
+					%endif
+				%endfor
+			%endif
+			;
+		%endfor
+		t = ct + i*dt;
+	}
+</%def>
+
+<%def name="SRK2()">
+	%for i in range(0, rhs_vars):
+		float xtt${i}, xim${i};
+	%endfor
+
+	for (i = 1; i <= samples; i++) {
+		## RNG call.
+		%for i in range(0, int(math.ceil(num_noises/2.0))):
+			## If we need an odd number of normal variates, then
 			## every other iteration we can simply reuse one
 			## variate from the previous one.
 			%if num_noises % 2 and i == num_noises / 2:
@@ -128,7 +245,7 @@ __global__ void AdvanceSim(unsigned int *rng_state,
 ## Local variables
 	float
 	%for i in range(0, rhs_vars):
-		x${i}, xt${i}, xtt${i}, xim${i},
+		x${i}, xt${i},
 	%endfor
 	%for param in par_cuda:
 		${param},
@@ -156,10 +273,18 @@ __global__ void AdvanceSim(unsigned int *rng_state,
 
 	// Additional local variables that depend on changing parameters.
 	%for name, value in local_vars.iteritems():
-		float ${name} = ${value};
+		%if type(value) is not tuple:
+			float ${name} = ${value};
+		%endif
 	%endfor
 
-	${SRK2()}
+	%if method == 'SRK2':
+		${SRK2()}
+	%elif method == 'Euler':
+		${Euler()}
+	%elif method == 'Milstein':
+		${Milstein()}
+	%endif
 ##	${rng_test()}
 
 	%for i in range(0, rhs_vars):

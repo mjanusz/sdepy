@@ -151,13 +151,6 @@ class SolverGenerator(object):
         kernel_parameters: list of parameters which will be passed as arguments to
             the kernel
         """
-        pass
-
-class SRK2(SolverGenerator):
-    """Stochastic Runge Kutta method of the 2nd order."""
-
-    @classmethod
-    def get_source(cls, sde, const_parameters, kernel_parameters, local_vars):
         ctx = {}
         ctx['const_parameters'] = const_parameters
         ctx['local_vars'] = dict([(k, KernelCodePrinter().doprint(v)) for k, v in local_vars.iteritems()])
@@ -169,11 +162,40 @@ class SRK2(SolverGenerator):
         ctx['rng_state_size'] = RNG_STATE[sde.options.rng]
         ctx['rng'] = sde.options.rng
 
+        ctx = cls.update_ctx(sde, ctx)
+
         lookup = TemplateLookup(directories=sys.path,
                 module_directory='/tmp/pysde_modules-%s' %
                                 (pwd.getpwuid(os.getuid())[0]))
         sde_template = lookup.get_template('sde.mako')
         return sde_template.render(**ctx)
+
+    @classmethod
+    def update_ctx(cls, sde, ctx):
+        return ctx
+
+
+class SRK2(SolverGenerator):
+    """Stochastic Runge Kutta method of the 2nd order."""
+
+    @classmethod
+    def update_ctx(cls, sde, ctx):
+        ctx['method'] = 'SRK2'
+        return ctx
+
+class Euler(SolverGenerator):
+
+    @classmethod
+    def update_ctx(cls, sde, ctx):
+        ctx['method'] = 'Euler'
+        return ctx
+
+class Milstein(SolverGenerator):
+
+    @classmethod
+    def update_ctx(cls, sde, ctx):
+        ctx['method'] = 'Milstein'
+        return ctx
 
 def int2float(t):
     #return re.sub(r'([0-9]+)([^\.])', r'\1.0\2', str(t))
@@ -489,6 +511,9 @@ class SDE(object):
             setattr(self.S, param, Symbol(param))
         for param in local_vars.iterkeys():
             setattr(self.S, param, Symbol(param))
+        for i in range(0, self.num_vars):
+            setattr(self.S, 'x%d' % i, Symbol('x%d' % i))
+        self.S.t = Symbol('t')
 
     def parse_args(self, args=None):
         if args is None:
