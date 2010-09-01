@@ -1044,7 +1044,7 @@ class SDE(object):
 
         names = ['sim_params', 'num_vars', 'num_noises',
                  'noise_map', 'period_map', 'code', 'options', 'float',
-                 'scan_vars', 'local_vars' 'const_local_vars', 'global_vars',
+                 'scan_vars', 'local_vars', 'const_local_vars', 'global_vars',
                  'par_multi_ordered']
 
         ret = {}
@@ -1087,7 +1087,7 @@ class SDE(object):
         state['numpy.random'] = numpy.random.get_state()
 
         if self.scan_vars:
-            state['sv'] = self._sv.copy()
+            state['sv'] = copy.deepcopy(self._sv)
 
         with open(self.options.dump_filename, 'w') as f:
             pickle.dump(state, f, pickle.HIGHEST_PROTOCOL)
