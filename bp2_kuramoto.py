@@ -6,7 +6,6 @@ import math
 import numpy
 import sde
 import sympy
-import sys
 
 def init_vector(sdei, i):
     if i == 0:
@@ -22,13 +21,17 @@ sim_params = {'f1': 'constant force on the 1st particle',
               'd0': 'noise strength',
               'amp': 'AC drive amplitude'}
 
-local_vars = { 
+local_vars = {
         'ns0': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * 2.0 / sdei.S.gam1),
         'ns1': lambda sdei: sympy.sqrt(sdei.S.d0 * sdei.S.dt * 2.0 / sdei.S.gam2),
         }
 
+const_pars = {
+        'phi0': lambda sdei: numpy.random.uniform(0.0, 2.0 * numpy.pi, sdei.num_threads)
+    }
+
 code = """
-    dx0 = (is * sinf(x0 - x1) + f1 + amp * cosf(t)) / gam1;
+    dx0 = (is * sinf(x0 - x1) + f1 + amp * cosf(t + phi0)) / gam1;
     dx1 = (-is * sinf(x0 - x1) + f2) / gam2;
 """
 
@@ -36,7 +39,7 @@ ns_map = {0: ['ns0', 0], 1: [0, 'ns1']}
 period_map = {0: sde.PeriodInfo(period=2.0 * math.pi, freq=1.0)}
 
 sdei = sde.SDE(code, sim_params, num_vars=2, num_noises=2, noise_map=ns_map, period_map=period_map,
-               local_vars=local_vars)
+               local_vars=local_vars, const_pars=const_pars)
 
 output = {'path': {
             'main': [sde.OutputDecl(func=sde.avg_moments, vars=[0, 1])],
@@ -47,5 +50,5 @@ output = {'path': {
         }
 
 sdei.prepare(sde.SRK2, init_vector)
-sdei.simulate(output)
+sdei.simulate(output, block_size=128)
 
