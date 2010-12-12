@@ -12,7 +12,8 @@ def init_vector(sdei, i):
         # Positions.
         a = numpy.zeros(sdei.num_threads)
         force = sdei.get_param('force').copy()
-        force[(force > 1.0)] = 1.0
+        if force.shape:
+            force[(force > 1.0)] = 1.0
         a[:] = numpy.arcsin(force / sdei.get_param('psd'))
         return a
     else:
