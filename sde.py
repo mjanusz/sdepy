@@ -153,25 +153,18 @@ class SRK2(SolverGenerator):
         return ctx
 
 class Euler(SolverGenerator):
-
     @classmethod
     def update_ctx(cls, sde, ctx):
         ctx['method'] = 'Euler'
         return ctx
 
 class Milstein(SolverGenerator):
-
     @classmethod
     def update_ctx(cls, sde, ctx):
         ctx['method'] = 'Milstein'
         return ctx
 
-def int2float(t):
-    #return re.sub(r'([0-9]+)([^\.])', r'\1.0\2', str(t))
-    return str(t)
-
 class KernelCodePrinter(CCodePrinter):
-
     def _print_Pow(self, expr):
         PREC = precedence(expr)
         if expr.exp is basic.S.NegativeOne:
@@ -182,8 +175,8 @@ class KernelCodePrinter(CCodePrinter):
             return '%s*%s' % (self.parenthesize(expr.base, PREC),
                               self.parenthesize(expr.base, PREC))
         else:
-            return int2float('powf(%s,%s)' % (self.parenthesize(expr.base, PREC),
-                                              self.parenthesize(expr.exp, PREC)))
+            return 'powf(%s,%s)' % (self.parenthesize(expr.base, PREC),
+                                    self.parenthesize(expr.exp, PREC))
 
     def _print_Function(self, expr):
         if expr.func.__name__ == 'log':
@@ -254,6 +247,7 @@ class SDE(object):
                 action='store_false', default=True)
         group.add_option('--deterministic', dest='deterministic', help='do not generate any noises',
                 action='store_true', default=False)
+        group.add_option('--debug', dest='debug', help='generate debug messages', action='store_true', default=False)
         self.parser.add_option_group(group)
 
         group = OptionGroup(self.parser, 'Debug settings')
@@ -354,6 +348,10 @@ class SDE(object):
         if self._continuable:
             self.finish()
 
+    def _dprint(self, msg):
+        if self.options.debug:
+            print "#", msg
+
     def _make_symbols(self, local_vars):
         """Create a sympy Symbol for each simulation parameter."""
         self.S = S()
@@ -453,6 +451,7 @@ class SDE(object):
                 self.scan_vars = []
             else:
                 self.scan_vars = [sv]
+                self._dprint("Scanning over '%s' on the GPU." % sv)
 
             # Create an ordered copy of the list of parameters which have multiple
             # values.
@@ -592,6 +591,7 @@ class SDE(object):
 
     def _init_rng(self):
         # Initialize the RNG seeds.
+        self._dprint('Initializing RNG seeds.')
         self._rng_state = numpy.fromstring(numpy.random.bytes(
             self.num_threads * RNG_STATE[self.options.rng] * numpy.uint32().nbytes),
             dtype=numpy.uint32)
@@ -767,6 +767,7 @@ class SDE(object):
                 period = 1.0
             self.dt = self.float(period / self.options.spp)
             cuda.memcpy_htod(self._gpu_sym['dt'], self.dt)
+            self._dprint("Setting 'dt' = %f" % self.dt)
 
             # Evaluate constant local vars.
             subs = {self.S.dt: self.dt}
@@ -774,7 +775,9 @@ class SDE(object):
                 subs[Symbol(k)] = v
 
             for name, value in self.const_local_vars.iteritems():
-                cuda.memcpy_htod(self._gpu_sym[name], self.float(value.subs(subs)))
+                val = self.float(value.subs(subs))
+                self._dprint("Setting '%s' = %f" % (name, val))
+                cuda.memcpy_htod(self._gpu_sym[name], val)
 
             # In the resume mode, we skip all the computations that have already
             # been completed and thus are saved in self.prev_state_results.
@@ -793,6 +796,7 @@ class SDE(object):
             # Loop over all values of a specific parameter.
             for val in self.options.__dict__[par]:
                 self._sim_sym[par] = self.float(val)
+                self._dprint("Setting '%s' = %f" % (par, self._sim_sym[par]))
                 cuda.memcpy_htod(self._gpu_sym[par], self.float(val))
                 self._run_nested(range_pars[1:])
 
@@ -812,6 +816,7 @@ class SDE(object):
         # TODO: extract this into a separate function
         if (self.options.continue_ or
                 (self.options.resume and self._scan_iter < len(self.prev_state_results))):
+            self._dprint('Restoring simulation state.')
             self.vec = self.prev_state_results[self._scan_iter][1]
             self.vec_nx = self.prev_state_results[self._scan_iter][2]
             self._rng_state = self.prev_state_results[self._scan_iter][3]
@@ -830,6 +835,7 @@ class SDE(object):
                     transient = False
         else:
             # Reinitialize the positions.
+            self._dprint('Initializing positions.')
             self.vec = []
             for i in range(0, self.num_vars):
                 vt = self.init_vectors(self, i).astype(self.float)
@@ -843,6 +849,7 @@ class SDE(object):
             for par_name, par_gen in sorted(self.ext_pars_gen.iteritems()):
                 vt = par_gen(self).astype(self.float)
                 self.ext_pars.append(vt)
+                self._dprint("Setting '%s' = %f" % (par_name, vt))
                 cuda.memcpy_htod(self._gpu_ext_pars[i], vt)
                 i += 1
 
