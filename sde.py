@@ -1,31 +1,34 @@
+# TODO: make it possible to specify params programmatically
+
 import copy
 import cPickle as pickle
 import math
-import operator
 import os
 import pwd
-import re
 import signal
 import sys
 import time
-from collections import namedtuple, Iterable
-
+from collections import namedtuple
 from optparse import OptionGroup, OptionParser, OptionValueError, Values
 
 import numpy
-import sympy
 from sympy import Symbol
 from sympy.core import basic
 from sympy.printing.ccode import CCodePrinter
-from sympy.printing.precedence import precedence, PRECEDENCE
+from sympy.printing.precedence import precedence
 
 import pycuda.autoinit
 import pycuda.driver as cuda
 import pycuda.compiler
 import pycuda.tools
 
-from mako.template import Template
 from mako.lookup import TemplateLookup
+
+import output
+
+# For backwards-compatibility.  New scripts should import these functions
+# directly from the output module.
+from output import drift_velocity, abs_drift_velocity, diffusion_coefficient, avg_moments
 
 PeriodInfo = namedtuple('PeriodInfo', 'period freq')
 OutputDecl = namedtuple('OutputDecl', 'func vars')
@@ -36,51 +39,6 @@ RNG_STATE = {
     'kiss32': 4,
     'nr32': 4,
 }
-
-def drift_velocity(sde, *args):
-    ret = []
-    for starting, final in args:
-        a = starting.astype(numpy.float64)
-        b = final.astype(numpy.float64)
-
-        ret.append((numpy.average(b) - numpy.average(a)) /
-                (sde.sim_t - sde.start_t))
-
-    return ret
-
-def abs_drift_velocity(sde, *args):
-    ret = []
-    for starting, final in args:
-        a = starting.astype(numpy.float64)
-        b = final.astype(numpy.float64)
-
-        ret.append(numpy.average(numpy.abs(b - a)) /
-                (sde.sim_t - sde.start_t))
-
-    return ret
-
-def diffusion_coefficient(sde, *args):
-    ret = []
-    for starting, final in args:
-        a = starting.astype(numpy.float64)
-        b = final.astype(numpy.float64)
-
-        deff1 = numpy.average(numpy.square(b)) - numpy.average(b)**2
-        deff2 = numpy.average(numpy.square(a)) - numpy.average(a)**2
-#        ret.append((deff1 - deff2) / (2.0 * (sde.sim_t - sde.start_t)))
-        ret.append(deff1 / (2.0 * sde.sim_t))
-        ret.append(deff2 / (2.0 * sde.start_t))
-
-    return ret
-
-def avg_moments(sde, *args):
-    ret = []
-
-    for arg in args:
-        ret.append(numpy.average(arg))
-        ret.append(numpy.average(numpy.square(arg)))
-
-    return ret
 
 want_save = False
 want_dump = False
@@ -141,6 +99,8 @@ def _get_module_source(*files):
         fp.close()
     return src
 
+class StateError(Exception):
+    pass
 
 class SolverGenerator(object):
     @classmethod
@@ -221,148 +181,6 @@ class KernelCodePrinter(CCodePrinter):
             return 'logf(%s)' % self.stringify(expr.args, ', ')
         else:
             return super(KernelCodePrinter, self)._print_Function(expr)
-
-class TextOutput(object):
-    def __init__(self, sde, subfiles):
-        self.sde = sde
-        self.subfiles = subfiles
-        self.out = {}
-
-        if sde.options.output is not None:
-            self.out['main'] = open(sde.options.output, 'w')
-
-            for sub in subfiles:
-                if sub == 'main':
-                    continue
-                self.out[sub] = open('%s_%s' % (sde.options.output, sub), 'w')
-        else:
-            if len(subfiles) > 1:
-                raise ValueError('Output file name required so that auxiliary data stream can be saved.')
-
-            self.out['main'] = sys.stdout
-
-    def finish_block(self):
-        print >>self.out['main'], ''
-        self.out['main'].flush()
-
-    def data(self, **kwargs):
-        for name, val in kwargs.iteritems():
-            def my_rep(val):
-                if isinstance(val, Iterable):
-                    return ' '.join(my_rep(x) for x in val)
-                else:
-                    return str(val)
-
-            rep = [my_rep(x) for x in val]
-            print >>self.out[name], ' '.join(rep)
-
-    def header(self):
-        out = self.out['main']
-
-        print >>out, '# %s' % ' '.join(sys.argv)
-        if self.sde.options.seed is not None:
-            print >>out, '# seed = %d' % self.sde.options.seed
-        print >>out, '# sim periods = %d' % self.sde.options.simperiods
-        print >>out, '# transient periods = %d' % self.sde.options.transients
-        print >>out, '# samples = %d' % self.sde.options.samples
-        print >>out, '# paths = %d' % self.sde.options.paths
-        print >>out, '# spp = %d' % self.sde.options.spp
-        for par in self.sde.parser.par_single:
-            print >>out, '# %s = %f' % (par, self.sde.options.__dict__[par])
-        for par in self.sde.par_multi_ordered:
-            print >>out, '# %s = %s' % (par, ' '.join(str(x) for x in self.sde.options.__dict__[par]))
-        for par in self.sde.scan_vars:
-            print >>out, '# %s = %s' % (par, ' '.join(str(x) for x in self.sde.options.__dict__[par]))
-
-    def close(self):
-        pass
-
-class NpyOutput(object):
-    def __init__(self, sde, subfiles):
-        self.sde = sde
-        self.subfiles = subfiles
-
-        # This dictionary maps the subfile name to a list of lists.
-        # Every entry in the outer list represents one point in the
-        # parameter space.  The inner list represents the results for
-        # a particular set of parameters.
-        self.cache = {}
-
-    def finish_block(self):
-        global want_save
-
-        if want_save:
-            self.close()
-            want_save = False
-
-    def data(self, **kwargs):
-        for name, val in kwargs.iteritems():
-            self.cache.setdefault(name, []).append(val)
-
-    def header(self):
-        self.cmdline = '%s' % ' '.join(sys.argv)
-        self.scan_vars = self.sde.scan_vars
-        self.par_multi_ordered = self.sde.par_multi_ordered
-
-    def close(self):
-        out = {}
-        shape = []
-
-        for par in self.par_multi_ordered:
-            out[par] = getattr(self.sde.options, par)
-            shape.append(len(out[par]))
-
-        for sv in self.scan_vars:
-            out[sv] = getattr(self.sde.options, sv)
-            shape.append(len(out[sv]))
-
-        for name, val in self.cache.iteritems():
-            inner_len = max(len(x) for x in val)
-            out[name] = numpy.array(val, dtype=self.sde.float)
-
-            if shape and reduce(operator.mul, shape) * inner_len == reduce(operator.mul, out[name].shape):
-                out[name] = numpy.reshape(out[name], shape + [inner_len])
-
-        numpy.savez(self.sde.options.output, cmdline=self.cmdline, scan_vars=self.scan_vars,
-                    par_multi=self.par_multi_ordered, options=self.sde.options, **out)
-
-class StoreOutput(object):
-    def __init__(self, sde, subfiles):
-        self.sde = sde
-        self.subfiles = subfiles
-        self.cache = {}
-
-    def finish_block(self):
-        pass
-
-    def data(self, **kwargs):
-        for name, val in kwargs.iteritems():
-            self.cache.setdefault(name, []).append(val)
-
-    def header(self):
-        self.scan_vars = self.sde.scan_vars
-        self.par_multi_ordered = self.sde.par_multi_ordered
-
-    def close(self):
-        out = {}
-        shape = []
-
-        for par in self.par_multi_ordered:
-            out[par] = getattr(self.sde.options, par)
-            shape.append(len(out[par]))
-
-        for sv in self.scan_vars:
-            out[sv] = getattr(self.sde.options, sv)
-            shape.append(len(out[sv]))
-
-        for name, val in self.cache.iteritems():
-            inner_len = max(len(x) for x in val)
-            out[name] = numpy.array(val, dtype=self.sde.float)
-
-            if shape and reduce(operator.mul, shape) * inner_len == reduce(operator.mul, out[name].shape):
-                out[name] = numpy.reshape(out[name], shape + [inner_len])
-
-        self.out = out
 
 class S(object):
     def __init__(self):
@@ -498,11 +316,22 @@ class SDE(object):
                 raise ValueError('The number of noise strengths for variable %s'
                     ' has to be equal to %d.' % (k, num_noises))
 
+        # Indicates whether simulate() has been run.
+        self._simulate_done = False
+        # Indicates whether prepare() has been run.
+        self._prepared = False
+        # Indicates whether the simulation can be continued.
+        self._continuable = True
+
         self.parse_args(args)
 
         if self.options.deterministic:
             self.num_noises = 0
             self.noise_map = []
+
+    def __del__(self):
+        if self._continuable:
+            self.finish()
 
     def make_symbols(self, local_vars):
         """Create a sympy Symbol for each simulation parameter."""
@@ -622,6 +451,17 @@ class SDE(object):
             if self.options.format_src:
                 os.system(self.format_cmd.format(file=self.options.save_src))
 
+        # Initialize signal handlers in case a dumpfile has been requested.
+        if self.options.dump_filename is not None:
+            signal.signal(signal.SIGUSR1, _sighandler)
+            signal.signal(signal.SIGINT, _sighandler)
+            signal.signal(signal.SIGQUIT, _sighandler)
+            signal.signal(signal.SIGHUP, _sighandler)
+            signal.signal(signal.SIGTERM, _sighandler)
+
+        signal.signal(signal.SIGUSR2, _sighandler)
+        self._prepared = True
+
         return self.cuda_prep(init_vectors, kernel_source)
 
     @property
@@ -641,6 +481,13 @@ class SDE(object):
             return self._sim_sym[name]
         else:
             return getattr(self.options, name)
+
+    def set_param(self, name, value):
+        # Multi-valued paramers cannot be programmatically reset.
+        assert name not in self.scan_vars
+        assert name in self._sim_sym
+
+        self._sim_sym[name] = value
 
     def cuda_prep(self, init_vectors, sources, sim_func='AdvanceSim'):
         """Prepare a SDE simulation for execution using CUDA.
@@ -735,6 +582,7 @@ class SDE(object):
 
 
     def get_var(self, i, starting=False):
+        """Return a vector of the i-th dynamical variable."""
         if starting:
             vec = self.vec_start
             nx = self.vec_start_nx
@@ -742,6 +590,7 @@ class SDE(object):
             vec = self.vec
             nx = self.vec_nx
 
+        # Unfold the variable if necessary.
         if i in nx:
             return vec[i] + self.period_map[i].period * nx[i]
         else:
@@ -757,7 +606,7 @@ class SDE(object):
     def sim_time_to_iter(self, time_):
         return int(time_ / (self.dt * self.options.samples))
 
-    def simulate(self, req_output, block_size=64):
+    def simulate(self, req_output, block_size=64, continuable=False):
         """Run a CUDA SDE simulation.
 
         req_output: a dictionary mapping the the output mode to a list of
@@ -766,14 +615,18 @@ class SDE(object):
             of variables that will be passed to this function
         block_size: CUDA block size
         """
+        if not self._prepared:
+            raise StateError('Call the prepare() method before running a simulation')
+
+        # Initialize the output module.
         self.req_output = req_output[self.options.omode]
 
         if self.options.oformat == 'text':
-            self.output = TextOutput(self, self.req_output.keys())
+            self.output = output.TextOutput(self, self.req_output.keys())
         elif self.options.oformat == 'npy':
-            self.output = NpyOutput(self, self.req_output.keys())
+            self.output = output.NpyOutput(self, self.req_output.keys())
         elif self.options.oformat == 'store':
-            self.output = StoreOutput(self, self.req_output.keys())
+            self.output = output.StoreOutput(self, self.req_output.keys())
 
         self.output.header()
 
@@ -783,44 +636,66 @@ class SDE(object):
             for func, vars in v:
                 self.req_vars |= set(vars)
 
+        # Initialize the CUDA kernel.
         self.block_size = block_size
         arg_types = ['P'] + ['P']*self.num_vars + ['P'] * (len(self.scan_vars) +
                 len(self.ext_pars_gen.keys())) + [self.float]
         self.advance_sim.prepare(arg_types, block=(block_size, 1, 1))
 
+        # Print stats about the kernel.
         kern = self.advance_sim
         ddata = pycuda.tools.DeviceData()
-        occ = pycuda.tools.OccupancyRecord(ddata, block_size, kern.shared_size_bytes, kern.num_regs)
+        occ = pycuda.tools.OccupancyRecord(ddata, block_size,
+                kern.shared_size_bytes, kern.num_regs)
 
-        print '# CUDA stats l:%d  s:%d  r:%d  occ:(%f tb:%d w:%d l:%s)' % (kern.local_size_bytes, kern.shared_size_bytes,
-                    kern.num_regs, occ.occupancy, occ.tb_per_mp, occ.warps_per_mp, occ.limited_by)
+        print '# CUDA stats l:%d  s:%d  r:%d  occ:(%f tb:%d w:%d l:%s)' % (
+                kern.local_size_bytes, kern.shared_size_bytes,
+                kern.num_regs, occ.occupancy, occ.tb_per_mp,
+                occ.warps_per_mp, occ.limited_by)
 
         self._scan_iter = 0
+        # Set to True so that continue_simulation will always run.  If the
+        # simulation is not continuable, this variable will be set to False in
+        # continue_simulation.
+        self._continuable = True
+        self.continue_simulation(continuable)
+        self._simulate_done = True
 
-        if self.options.dump_filename is not None:
-            signal.signal(signal.SIGUSR1, _sighandler)
-            signal.signal(signal.SIGINT, _sighandler)
-            signal.signal(signal.SIGQUIT, _sighandler)
-            signal.signal(signal.SIGHUP, _sighandler)
-            signal.signal(signal.SIGTERM, _sighandler)
-
-        signal.signal(signal.SIGUSR2, _sighandler)
+    def continue_simulation(self, continuable=False):
+        if not self._continuable:
+            raise StateError("This simulation cannot be continued.")
 
         self._run_nested(self.par_multi_ordered)
-        self.output.close()
+        self._continuable = continuable
+
+        if not continuable:
+            self.finish()
 
         if self.options.dump_filename is not None:
             self.dump_state()
 
+    def finish(self):
+        # If simulate() has not been run yet, the output object is not defined.
+        if self._simulate_done:
+            self.output.close()
+        self._continuable = False
+
     def _run_nested(self, range_pars):
+        """Process parameters with multiple values and start a SDE simulation.
+
+        range_pars: iterable of names of parameters that have more than one
+            value
+        """
         # No more parameters to loop over, time to actually run the kernel.
         if not range_pars:
             # Reinitialize the RNG here so that there is no interdependence
             # between runs.  This also guarantees that the resume/continue
-            # modes can work correctly in the case of scan over 2+ parameters.
+            # modes can work correctly in the case of a scan over 2+ parameters.
             self._init_rng()
 
-            # Calculate period and step size.
+            # Calculate period and step size.  The frequency variable is
+            # guaranteed to be constant during a single kernel run, i.e. the
+            # scan over frequency is performed via a loop on the host.
             if self.freq_var is not None:
                 period = 2.0 * math.pi / self._sim_sym[self.freq_var]
             else:
@@ -868,6 +743,8 @@ class SDE(object):
             transient = True
             pathwise = False
 
+        # Restore previous state.
+        # TODO: extract this into a separate function
         if (self.options.continue_ or
                 (self.options.resume and self._scan_iter < len(self.prev_state_results))):
             self.vec = self.prev_state_results[self._scan_iter][1]
@@ -931,6 +808,8 @@ class SDE(object):
 
         global want_dump, want_exit, want_save
 
+        # TODO: if transients are requested, split the kernel call into
+        # two parts -- before the transient, and after.
         # Actually run the simulation here.
         for j in xrange(init_iter, self.max_sim_iter):
             self.sim_t = self.iter_to_sim_time(j)
@@ -949,6 +828,7 @@ class SDE(object):
             self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
             self.sim_t += self.options.samples * self.dt
 
+            # See whether a data save was requested.
             if (self.options.save_every > 0 and
                     (time.time() - self.last_save > self.options.save_every)):
                 want_save = True
@@ -956,11 +836,16 @@ class SDE(object):
 
             fold_variables(j, True)
 
+            # Save the current data if running in pathwise mode.
             if pathwise:
                 self.output_current()
                 if self.scan_vars:
                     self.output.finish_block()
+                    if want_save:
+                        self.output.flush()
+                        want_save = False
 
+            # Create a dump file if requested.
             if (want_dump or
                     (self.options.dump_every > 0 and
                      time.time() - self.last_dump > self.options.dump_every)):
@@ -974,49 +859,43 @@ class SDE(object):
                 if want_exit:
                     sys.exit(0)
 
+        # Only calculate the summary values if we are running in summary mode.
         if not pathwise:
             self.output_summary()
 
         self.output.finish_block()
+        if want_save:
+            self.output.flush()
+            want_save = False
         self.save_block()
 
     def output_current(self):
-        vars = {}
-
-        # Get required variables from the compute device and
-        # unfold them.
+        """Pass the results of the current iteration to the output module."""
+        dyn_vars = {}
+        # Get required variables from the compute device and unfold them.
         for i in self.req_vars:
             cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
-            vars[i] = self.get_var(i)
+            dyn_vars[i] = self.get_var(i)
 
-        self._output_results(vars, self.sim_t)
+        self._output_results(dyn_vars, self.sim_t)
 
     def output_summary(self):
-        vars = {}
-
-        # Get required variables from the compute device and
-        # unfold them.  For each variable, store both the reference
-        # (starting) value and the final one.
+        dyn_vars = {}
+        # Get required variables from the compute device and unfold them.
         for i in self.req_vars:
             cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
-            vars[i] = (self.get_var(i, True), self.get_var(i))
+            # For each variable, store both the reference (starting) value
+            # and the final one.
+            dyn_vars[i] = (self.get_var(i, starting=True), self.get_var(i))
 
-        self._output_results(vars)
+        self._output_results(dyn_vars)
 
     def _output_results(self, vars, *misc_pars):
+        """Prepare data for the output module."""
         # Iterate over all values of the scan parameters.  For each unique
         # value, calculate the requested output(s).
         for i in range(0, self.scan_var_size):
-            out = {}
-            for out_name, _ in self.req_output.iteritems():
-                out[out_name] = []
-
-#            for par in self.parser.par_multi:
-#                out['main'].append(self._sim_sym[par])
-            out['main'].extend(misc_pars)
-
-#            for sv in self._sv:
-#                out['main'].append(sv[i*self.options.paths])
+            out = {'main': list(misc_pars)}
 
             for out_name, out_decl in self.req_output.iteritems():
                 for decl in out_decl:
@@ -1034,7 +913,7 @@ class SDE(object):
                                 args)
 
                     # Evaluate the requested function.
-                    out[out_name].extend(decl.func(self, *args))
+                    out.setdefault(out_name, []).extend(decl.func(self, *args))
 
             self.output.data(**out)
 
