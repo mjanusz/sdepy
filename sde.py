@@ -428,6 +428,9 @@ class SDE(object):
         if max_par is None:
             return None
 
+        # Remove the selected parameter from the set of multi-valued parameters,
+        # over which a host-side loop will be performed when the simulation is
+        # executed.
         self.parser.par_multi.remove(max_par)
         return max_par
 
@@ -515,6 +518,10 @@ class SDE(object):
         return ret
 
     def get_param(self, name):
+        """Get the value of a simulation parameter.
+
+        name: name of the parameter to get
+        """
         if name in self.scan_vars:
             idx = self.scan_vars.index(name)
             return self._sv[idx]
@@ -524,6 +531,14 @@ class SDE(object):
             return getattr(self.options, name)
 
     def set_param(self, name, value):
+        """Set the value of a simulation parameter.
+
+        Note that multiply-valued parameters (i.e. parameters over which a
+        scan is being perfomed), cannot be assigned to in this way.
+
+        :param name: name of the parameter to set
+        :param value: value of the parameter to set
+        """
         # Multi-valued paramers cannot be programmatically reset.
         assert name not in self.scan_vars
         assert name in self._sim_sym
@@ -533,11 +548,11 @@ class SDE(object):
     def cuda_prep(self, init_vectors, sources, sim_func='AdvanceSim'):
         """Prepare a SDE simulation for execution using CUDA.
 
-        init_vectors: a function which takes an instance of this class and the
+        :param init_vectors: a function which takes an instance of this class and the
             variable number as arguments and returns an initialized vector of
             size num_threads
-        sources: list of source code files for the simulation
-        sim_func: name of the kernel advacing the simulation in time
+        :param sources: list of source code files for the simulation
+        :param sim_func: name of the kernel advacing the simulation in time
         """
         if self.options.seed is not None and not (self.options.resume or self.options.continue_):
             numpy.random.seed(self.options.seed)
@@ -623,7 +638,14 @@ class SDE(object):
 
 
     def get_var(self, i, starting=False):
-        """Return a vector of the i-th dynamical variable."""
+        """Return a vector of the i-th dynamical variable.
+
+        :param i: the dynamical variable to be returned
+        :param starting: if True and if running in summary more, makes this method
+            return the value of the chosen dynamical variable as measured at
+            the reference time point (after `transients` periods).  Otherwise,
+            the current value is returned.
+        """
         if starting:
             vec = self.vec_start
             nx = self.vec_start_nx
@@ -650,11 +672,13 @@ class SDE(object):
     def simulate(self, req_output, block_size=64, continuable=False):
         """Run a CUDA SDE simulation.
 
-        req_output: a dictionary mapping the the output mode to a list of
+        :param req_output: a dictionary mapping the the output mode to a list of
             tuples of ``(callable, vars)``, where ``callable`` is a function
             that will compute the values to be returned, and ``vars`` is a list
             of variables that will be passed to this function
-        block_size: CUDA block size
+        :param block_size: CUDA block size
+        :param continuable: if True, the simulation can be continued (possibly after
+            changing some of the parameters) using :meth:`continue_simulation`
         """
         if not self._prepared:
             raise StateError('Call the prepare() method before running a simulation')
@@ -724,7 +748,7 @@ class SDE(object):
     def _run_nested(self, range_pars):
         """Process parameters with multiple values and start a SDE simulation.
 
-        range_pars: iterable of names of parameters that have more than one
+        :param range_pars: iterable of names of parameters that have more than one
             value
         """
         # No more parameters to loop over, time to actually run the kernel.
