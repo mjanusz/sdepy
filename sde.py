@@ -300,7 +300,7 @@ class SDE(object):
         else:
             self.period_map = period_map
 
-        self.make_symbols(local_vars)
+        self._make_symbols(local_vars)
 
         # Local variables are defined as lambdas since they need access to the
         # symbols.  Replace the lambdas with their values here now that the
@@ -354,7 +354,7 @@ class SDE(object):
         if self._continuable:
             self.finish()
 
-    def make_symbols(self, local_vars):
+    def _make_symbols(self, local_vars):
         """Create a sympy Symbol for each simulation parameter."""
         self.S = S()
         for param in self.sim_params.iterkeys():
