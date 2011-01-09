@@ -261,12 +261,12 @@ class SDE(object):
                                type='string', action='store', default=None)
         group.add_option('--use_src', dest='use_src', help='use FILE instead of the automatically generated code',
                 metavar='FILE', type='string', action='store', default=None)
-        group.add_option('--noformat_src', dest='format_src', help='do not format the generated source code', action='store_false', default=True)
+        group.add_option('--noutput_format_src', dest='format_src', help='do not format the generated source code', action='store_false', default=True)
         self.parser.add_option_group(group)
 
         group = OptionGroup(self.parser, 'Output settings')
-        group.add_option('--output_mode', dest='omode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
-        group.add_option('--output_format', dest='oformat', help='output file format', type='choice',
+        group.add_option('--output_mode', dest='output_mode', help='output mode', type='choice', choices=['summary', 'path'], action='store', default='summary')
+        group.add_option('--output_format', dest='output_format', help='output file format', type='choice',
                 choices=['npy', 'text', 'store'], action='store', default='npy')
         group.add_option('--output', dest='output', help='base output filename', type='string', action='store', default=None)
         group.add_option('--save_every', dest='save_every', help='save output every N seconds', type='int',
@@ -396,7 +396,7 @@ class SDE(object):
             if self.options.__dict__[name] == None:
                 raise OptionValueError('Required option "%s" not specified.' % name)
 
-        if self.options.output is None and self.options.oformat != 'text':
+        if self.options.output is None and self.options.output_format != 'text':
             raise OptionValueError('Required option "output"" not specified.')
 
         if self.options.precision == 'single':
@@ -660,13 +660,13 @@ class SDE(object):
             raise StateError('Call the prepare() method before running a simulation')
 
         # Initialize the output module.
-        self.req_output = req_output[self.options.omode]
+        self.req_output = req_output[self.options.output_mode]
 
-        if self.options.oformat == 'text':
+        if self.options.output_format == 'text':
             self.output = output.TextOutput(self, self.req_output.keys())
-        elif self.options.oformat == 'npy':
+        elif self.options.output_format == 'npy':
             self.output = output.NpyOutput(self, self.req_output.keys())
-        elif self.options.oformat == 'store':
+        elif self.options.output_format == 'store':
             self.output = output.StoreOutput(self, self.req_output.keys())
 
         self.output.header()
@@ -777,7 +777,7 @@ class SDE(object):
 
         # Prepare an array for initial value of the variables (after
         # transients).
-        if self.options.omode == 'path':
+        if self.options.output_mode == 'path':
             transient = False
             pathwise = True
         else:
@@ -797,7 +797,7 @@ class SDE(object):
 
             self.sim_t = self.prev_state_results[self._scan_iter][0]
 
-            if self.options.omode == 'summary':
+            if self.options.output_mode == 'summary':
                 self.start_t = self.prev_state_results[self._scan_iter][4]
                 self.vec_start = self.prev_state_results[self._scan_iter][5]
                 self.vec_start_nx = self.prev_state_results[self._scan_iter][6]
@@ -988,7 +988,7 @@ class SDE(object):
         for i in range(0, self.num_vars):
             cuda.memcpy_dtoh(self.vec[i], self._gpu_vec[i])
 
-        if self.options.omode == 'path':
+        if self.options.output_mode == 'path':
             self.state_results.append((self.sim_t, copy.deepcopy(self.vec), self.vec_nx.copy(),
                 self._rng_state.copy()))
         else:
@@ -1045,7 +1045,7 @@ class SDE(object):
         # If this is a continuation of a previous simulation, make output-related
         # parameters overridable.
         if new_options.continue_:
-            overridable.extend(['output', 'oformat', 'omode', 'simperiods'])
+            overridable.extend(['output', 'output_format', 'output_mode', 'simperiods'])
             # TODO: This could potentially cause problems with transients if the original
             # simulation was run in summary mode and the new one is in path mode.
         else:
