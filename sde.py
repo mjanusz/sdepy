@@ -1,5 +1,3 @@
-# TODO: make it possible to specify params programmatically
-
 import copy
 import cPickle as pickle
 import math
@@ -9,7 +7,8 @@ import signal
 import sys
 import time
 from collections import namedtuple
-from optparse import OptionGroup, OptionParser, OptionValueError, Values
+import optparse
+from optparse import OptionGroup, OptionParser, OptionValueError
 
 import numpy
 from sympy import Symbol
@@ -66,6 +65,16 @@ def _convert_to_double(src):
     s = s.replace('sinf(', 'sin(')
     s = s.replace('FLT_EPSILON', 'DBL_EPSILON')
     return re.sub('([0-9]+\.[0-9]*)f', '\\1', s)
+
+class Values(optparse.Values):
+    def __init__(self, *args):
+        optparse.Values.__init__(self, *args)
+        self.specified = set()
+
+    def __setattr__(self, name, value):
+        self.__dict__[name] = value
+        if hasattr(self, 'specified'):
+            self.specified.add(name)
 
 def _parse_range(option, opt_str, value, parser):
     vals = value.split(':')
@@ -194,7 +203,7 @@ class SDE(object):
 
     def __init__(self, code, params, num_vars, num_noises,
             noise_map, period_map=None, args=None, local_vars=None,
-            const_pars={}):
+            const_pars={}, defaults=None):
         """
         :param code: the code defining the Stochastic Differential Equation
         :param params: dict of simulation parameters; keys are parameter names,
@@ -216,6 +225,18 @@ class SDE(object):
             The folded values will result in faster CUDA code if trigonometric
             functions are used and if the magnitude of their arguments always
             remains below 48039.0f (see CUDA documentation).
+        :param local_vars: dictionary mapping variable names to functions
+            returning SymPy expressions.  The functions should take exactly one
+            argument: an instance of the SDE class which called them.  This is
+            meant to be used for expressions that depend on the simulation
+            parameters.
+        :param const_pars: dictionary mapping variable names to functions
+            returning NumPy vectors of `sde.num_threads` length.  The functions
+            should take exactly one argument: an instance of the SDE class which
+            called them.
+        :param defaults: dictionary mapping option names to their default
+            values.  Any values specified on the command line will override
+            default settings specified this way.
         """
         self.parser = OptionParser()
 
@@ -302,14 +323,14 @@ class SDE(object):
         self._sim_sym = {}
         self._gpu_sym = {}
 
-        group = OptionGroup(self.parser, 'Simulation-specific settings')
+        sim_group = OptionGroup(self.parser, 'Simulation-specific settings')
 
         for name, help_string in params.iteritems():
-            group.add_option('--%s' % name, dest=name, action='callback',
+            sim_group.add_option('--%s' % name, dest=name, action='callback',
                     callback=_parse_range, type='string', help=help_string,
                     default=None)
 
-        self.parser.add_option_group(group)
+        self.parser.add_option_group(sim_group)
 
         for k, v in noise_map.iteritems():
             if len(v) != num_noises:
@@ -323,7 +344,7 @@ class SDE(object):
         # Indicates whether the simulation can be continued.
         self._continuable = True
 
-        self.parse_args(args)
+        self.parse_args(args, defaults, sim_group)
 
         if self.options.deterministic:
             self.num_noises = 0
@@ -344,12 +365,32 @@ class SDE(object):
             setattr(self.S, 'x%d' % i, Symbol('x%d' % i))
         self.S.t = Symbol('t')
 
-    def parse_args(self, args=None):
+    def parse_args(self, args=None, defaults=None, sim_group=None):
+        """Parse command line arguments.
+
+        :param args: string to use instead of sys.argv
+        :param defaults: dictionary of default values (option name -> value)
+        :param sim_group: OptionGroup containing simulation parameters
+        """
         if args is None:
             args = sys.argv
 
         self.options = Values(self.parser.defaults)
         self.parser.parse_args(args, self.options)
+
+        if defaults is not None:
+            for k, v in defaults.iteritems():
+                if k not in self.options.specified:
+                    # Simulation options need to be processed separated as they
+                    # might contain parameter ranges, which need to processed
+                    # by _parse_range.
+                    if k in self.sim_params and sim_group is not None:
+                        for option in sim_group.option_list:
+                            if option.dest == k:
+                                _parse_range(option, '--%s' % k, str(v), self.parser)
+                                break
+                    else:
+                        setattr(self.options, k, v)
 
         for name, hs in self.sim_params.iteritems():
             if self.options.__dict__[name] == None:
