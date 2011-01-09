@@ -800,11 +800,60 @@ class SDE(object):
                 cuda.memcpy_htod(self._gpu_sym[par], self.float(val))
                 self._run_nested(range_pars[1:])
 
+    def _restore_state(self, period):
+        self._dprint('Restoring simulation state.')
+        self.vec = self.prev_state_results[self._scan_iter][1]
+        self.vec_nx = self.prev_state_results[self._scan_iter][2]
+        self._rng_state = self.prev_state_results[self._scan_iter][3]
+        cuda.memcpy_htod(self._gpu_rng_state, self._rng_state)
+        for i in range(0, self.num_vars):
+            cuda.memcpy_htod(self._gpu_vec[i], self.vec[i])
+
+        self.sim_t = self.prev_state_results[self._scan_iter][0]
+
+        if self.options.output_mode == 'summary':
+            self.start_t = self.prev_state_results[self._scan_iter][4]
+            self.vec_start = self.prev_state_results[self._scan_iter][5]
+            self.vec_start_nx = self.prev_state_results[self._scan_iter][6]
+
+            if self.sim_t >= self.options.transients * period:
+                return False
+            return True
+        else:
+            return False
+
+    def _init_vectors(self, transient):
+        # Reinitialize the positions.
+        self._dprint('Initializing positions.')
+        self.vec = []
+        for i in range(0, self.num_vars):
+            vt = self.init_vectors(self, i).astype(self.float)
+            self.vec.append(vt)
+            cuda.memcpy_htod(self._gpu_vec[i], vt)
+
+        # Prepare an array for number of periods for periodic variables.
+        self.vec_nx = {}
+        for i, v in self.period_map.iteritems():
+            self.vec_nx[i] = numpy.zeros_like(self.vec[i]).astype(numpy.int64)
+
+        if transient:
+            self.vec_start = []
+            for i in range(0, self.num_vars):
+                self.vec_start.append(numpy.zeros_like(self.vec[i]))
+
+    def _init_ext_pars(self):
+        self.ext_pars = []
+        # Generate the values of the external parameters.
+        for i, (par_name, par_gen) in enumerate(sorted(self.ext_pars_gen.iteritems())):
+            vt = par_gen(self).astype(self.float)
+            self.ext_pars.append(vt)
+            self._dprint("Setting '%s' = %f" % (par_name, vt))
+            cuda.memcpy_htod(self._gpu_ext_pars[i], vt)
+
     def _run_kernel(self, period):
         kernel_args = [self._gpu_rng_state] + self._gpu_vec + self._gpu_sv + self._gpu_ext_pars
+        global want_dump, want_exit, want_save
 
-        # Prepare an array for initial value of the variables (after
-        # transients).
         if self.options.output_mode == 'path':
             transient = False
             pathwise = True
@@ -812,60 +861,26 @@ class SDE(object):
             transient = True
             pathwise = False
 
-        # Restore previous state.
-        # TODO: extract this into a separate function
         if (self.options.continue_ or
                 (self.options.resume and self._scan_iter < len(self.prev_state_results))):
-            self._dprint('Restoring simulation state.')
-            self.vec = self.prev_state_results[self._scan_iter][1]
-            self.vec_nx = self.prev_state_results[self._scan_iter][2]
-            self._rng_state = self.prev_state_results[self._scan_iter][3]
-            cuda.memcpy_htod(self._gpu_rng_state, self._rng_state)
-            for i in range(0, self.num_vars):
-                cuda.memcpy_htod(self._gpu_vec[i], self.vec[i])
-
-            self.sim_t = self.prev_state_results[self._scan_iter][0]
-
-            if self.options.output_mode == 'summary':
-                self.start_t = self.prev_state_results[self._scan_iter][4]
-                self.vec_start = self.prev_state_results[self._scan_iter][5]
-                self.vec_start_nx = self.prev_state_results[self._scan_iter][6]
-
-                if self.sim_t >= self.options.transients * period:
-                    transient = False
+            transient = self._restore_state(period)
+            # FIXME: Support external paremeters in resumed simulations.
         else:
-            # Reinitialize the positions.
-            self._dprint('Initializing positions.')
-            self.vec = []
-            for i in range(0, self.num_vars):
-                vt = self.init_vectors(self, i).astype(self.float)
-                self.vec.append(vt)
-                cuda.memcpy_htod(self._gpu_vec[i], vt)
-
-            i = 0
-            self.ext_pars = []
-            # FIXME: Handle this properly in the case of a resumed simulation.
-            # Generate the values of the external parameters.
-            for par_name, par_gen in sorted(self.ext_pars_gen.iteritems()):
-                vt = par_gen(self).astype(self.float)
-                self.ext_pars.append(vt)
-                self._dprint("Setting '%s' = %f" % (par_name, vt))
-                cuda.memcpy_htod(self._gpu_ext_pars[i], vt)
-                i += 1
-
-            # Prepare an array for number of periods for periodic variables.
-            self.vec_nx = {}
-            for i, v in self.period_map.iteritems():
-                self.vec_nx[i] = numpy.zeros_like(self.vec[i]).astype(numpy.int64)
-
-            if transient:
-                self.vec_start = []
-                for i in range(0, self.num_vars):
-                    self.vec_start.append(numpy.zeros_like(self.vec[i]))
-
+            # If this is a continued simulation, there is no need to
+            # reinitialize the vectors.
+            if not self._simulate_done:
+                self._init_vectors(transient)
+            self._init_ext_pars()
             self.sim_t = 0.0
 
+        init_iter = self.sim_time_to_iter(self.sim_t)
+
         def fold_variables(iter_, need_copy):
+            """Reduce periodic variables to the base domain.
+
+            :param need_copy: if True, the variable needs to be fetched from the
+                GPU
+            """
             for i, (period, freq) in self.period_map.iteritems():
                 if iter_ % freq == 0:
                     if need_copy:
@@ -875,10 +890,6 @@ class SDE(object):
                             numpy.floor_divide(self.vec[i], period).astype(numpy.int64))
                     self.vec[i] = numpy.remainder(self.vec[i], period)
                     cuda.memcpy_htod(self._gpu_vec[i], self.vec[i])
-
-        init_iter = self.sim_time_to_iter(self.sim_t)
-
-        global want_dump, want_exit, want_save
 
         # TODO: if transients are requested, split the kernel call into
         # two parts -- before the transient, and after.
