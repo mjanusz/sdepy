@@ -571,7 +571,7 @@ class SDE(object):
         else:
             options=[]
 
-        if type(sources) is str:
+        if type(sources) is str or type(sources) is unicode:
             self.mod = pycuda.compiler.SourceModule(sources, options=options)
         else:
             self.mod = pycuda.compiler.SourceModule(_get_module_source(*sources), options=options)
@@ -705,7 +705,7 @@ class SDE(object):
         self.block_size = block_size
         arg_types = ['P'] + ['P']*self.num_vars + ['P'] * (len(self.scan_vars) +
                 len(self.ext_pars_gen.keys())) + [self.float]
-        self.advance_sim.prepare(arg_types, block=(block_size, 1, 1))
+        self.advance_sim.prepare(arg_types)
 
         # Print stats about the kernel.
         kern = self.advance_sim
@@ -847,7 +847,7 @@ class SDE(object):
         for i, (par_name, par_gen) in enumerate(sorted(self.ext_pars_gen.iteritems())):
             vt = par_gen(self).astype(self.float)
             self.ext_pars.append(vt)
-            self._dprint("Setting '%s' = %f" % (par_name, vt))
+            self._dprint("Setting '%s' = %s" % (par_name, vt))
             cuda.memcpy_htod(self._gpu_ext_pars[i], vt)
 
     def _run_kernel(self, period):
@@ -908,7 +908,9 @@ class SDE(object):
             # NOTE: Here we implicitly assume that only the reduced value of
             # time matters for the evolution of the system.
             args = kernel_args + [self.float(math.fmod(self.sim_t, period))]
-            self.advance_sim.prepared_call((self.num_threads/self.block_size, 1), *args)
+            self.advance_sim.prepared_call((self.num_threads/self.block_size, 1),
+                                           (self.block_size, 1, 1),
+                                           *args)
             self.sim_t += self.options.samples * self.dt
 
             # See whether a data save was requested.
